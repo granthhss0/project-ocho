@@ -207,7 +207,7 @@ app.get('/api/encode', (req, res) => {
     const encoded = encodeProxyUrl(fullUrl);
     res.json({ 
       encoded,
-      proxyUrl: `/proxy/${encoded}`
+      proxyUrl: `/ocho/${encoded}`
     });
   } catch (error) {
     res.status(400).json({ error: 'Invalid URL' });
