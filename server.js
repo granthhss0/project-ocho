@@ -55,7 +55,7 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
   return rewritten;
 }
 
-app.get('/proxy/:url(*)', async (req, res) => {
+app.get('/ocho/:url(*)', async (req, res) => {
   let targetUrl = '';
   
   try {
@@ -107,7 +107,7 @@ app.get('/proxy/:url(*)', async (req, res) => {
     // Determine what we're actually serving
     if (contentType.includes('text/html')) {
       body = await response.text();
-      body = rewriteHtml(body, targetUrl, '/proxy/');
+      body = rewriteHtml(body, targetUrl, '/ocho/');
     } else if (contentType.includes('javascript') || contentType.includes('json')) {
       // For JS/JSON, return as text to avoid CORB
       body = await response.text();
