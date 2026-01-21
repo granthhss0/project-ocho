@@ -183,17 +183,27 @@ app.get('/proxy/:url(*)', async (req, res) => {
   } catch (error) {
     console.error('Proxy error:', error);
     
-    // For non-HTML requests (like JS, CSS, images), return appropriate error
-    const acceptHeader = req.headers.accept || '';
-    
-    if (acceptHeader.includes('application/javascript') || req.params.url.endsWith('.js')) {
-      res.status(500).type('application/javascript').send('// Error loading resource');
-      return;
+    // Decode URL to check file type
+    let targetUrl = '';
+    try {
+      targetUrl = decodeProxyUrl(req.params.url);
+    } catch (e) {
+      targetUrl = '';
     }
     
-    if (acceptHeader.includes('text/css') || req.params.url.endsWith('.css')) {
-      res.status(500).type('text/css').send('/* Error loading resource */');
-      return;
+    // For JavaScript files, return empty comment
+    if (targetUrl.includes('.js') || targetUrl.includes('javascript')) {
+      return res.status(200).type('application/javascript').send('// Failed to load');
+    }
+    
+    // For CSS files, return empty comment
+    if (targetUrl.includes('.css') || targetUrl.includes('css')) {
+      return res.status(200).type('text/css').send('/* Failed to load */');
+    }
+    
+    // For images and other binary, return 404
+    if (targetUrl.match(/\.(jpg|jpeg|png|gif|webp|svg|ico|woff|woff2|ttf)$/i)) {
+      return res.status(404).send('');
     }
     
     // For HTML or other requests, show error page
