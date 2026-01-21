@@ -104,19 +104,45 @@ app.get('/proxy/:url(*)', async (req, res) => {
     const contentType = response.headers.get('content-type') || '';
     let body;
     
+    // Determine what we're actually serving
     if (contentType.includes('text/html')) {
       body = await response.text();
       body = rewriteHtml(body, targetUrl, '/proxy/');
+    } else if (contentType.includes('javascript') || contentType.includes('json')) {
+      // For JS/JSON, return as text to avoid CORB
+      body = await response.text();
+    } else if (contentType.includes('text/css')) {
+      body = await response.text();
+    } else if (contentType.includes('image') || contentType.includes('font') || contentType.includes('video')) {
+      // Binary content
+      body = await response.buffer();
     } else {
-      // Pass everything else through unchanged
+      // Default to buffer for unknown types
       body = await response.buffer();
     }
     
     const headersToSend = {};
-    ['content-type', 'cache-control', 'expires'].forEach(header => {
+    
+    // Set correct content-type
+    if (contentType) {
+      headersToSend['content-type'] = contentType;
+    }
+    
+    // Copy safe headers
+    ['cache-control', 'expires', 'etag', 'last-modified'].forEach(header => {
       const value = response.headers.get(header);
       if (value) headersToSend[header] = value;
     });
+    
+    // Remove problematic headers
+    delete headersToSend['x-content-type-options'];
+    delete headersToSend['content-security-policy'];
+    delete headersToSend['x-frame-options'];
+    
+    // Force CORS headers
+    headersToSend['Access-Control-Allow-Origin'] = '*';
+    headersToSend['Cross-Origin-Resource-Policy'] = 'cross-origin';
+    headersToSend['Cross-Origin-Embedder-Policy'] = 'unsafe-none';
     
     res.set(headersToSend);
     res.send(body);
