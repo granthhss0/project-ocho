@@ -6,15 +6,12 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Serve static files
 app.use(express.static('public'));
 
-// Serve service worker from root
 app.get('/sw.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'sw.js'));
 });
 
-// URL encoding/decoding functions
 function encodeProxyUrl(url) {
   return Buffer.from(url).toString('base64')
     .replace(/\+/g, '-')
@@ -30,73 +27,23 @@ function decodeProxyUrl(encoded) {
   return Buffer.from(base64 + '='.repeat(padding), 'base64').toString('utf-8');
 }
 
-// Rewrite URLs in HTML content
 function rewriteHtml(html, baseUrl, proxyPrefix) {
   let rewritten = html;
   
-  // Rewrite absolute URLs
+  // Only rewrite HTML href and img src, skip script src
   rewritten = rewritten.replace(
-    /(href|src|action)=["']https?:\/\/[^"']+["']/gi,
-    (match) => {
-      const urlMatch = match.match(/=["']([^"']+)["']/);
-      if (urlMatch) {
-        const originalUrl = urlMatch[1];
-        const encoded = encodeProxyUrl(originalUrl);
-        return match.replace(originalUrl, `${proxyPrefix}${encoded}`);
-      }
-      return match;
-    }
-  );
-  
-  // Rewrite protocol-relative URLs
-  rewritten = rewritten.replace(
-    /(href|src|action)=["']\/\/[^"']+["']/gi,
-    (match) => {
-      const urlMatch = match.match(/=["']\/\/([^"']+)["']/);
-      if (urlMatch) {
-        const originalUrl = 'https://' + urlMatch[1];
-        const encoded = encodeProxyUrl(originalUrl);
-        return match.replace('//' + urlMatch[1], `${proxyPrefix}${encoded}`);
-      }
-      return match;
-    }
-  );
-  
-  // Rewrite relative URLs
-  rewritten = rewritten.replace(
-    /(href|src|action)=["']\/[^/"'][^"']*["']/gi,
-    (match) => {
-      const urlMatch = match.match(/=["']([^"']+)["']/);
-      if (urlMatch) {
-        const relativePath = urlMatch[1];
-        const absoluteUrl = new URL(relativePath, baseUrl).href;
-        const encoded = encodeProxyUrl(absoluteUrl);
-        return match.replace(relativePath, `${proxyPrefix}${encoded}`);
-      }
-      return match;
+    /(href|src)=["'](https?:\/\/[^"']+)["']/gi,
+    (match, attr, url) => {
+      // Skip script tags
+      if (match.toLowerCase().includes('script')) return match;
+      const encoded = encodeProxyUrl(url);
+      return `${attr}="${proxyPrefix}${encoded}"`;
     }
   );
   
   return rewritten;
 }
 
-// Rewrite CSS content
-function rewriteCss(css, baseUrl, proxyPrefix) {
-  return css.replace(
-    /url\(["']?([^)"']+)["']?\)/gi,
-    (match, url) => {
-      try {
-        const absoluteUrl = new URL(url.trim(), baseUrl).href;
-        const encoded = encodeProxyUrl(absoluteUrl);
-        return `url("${proxyPrefix}${encoded}")`;
-      } catch {
-        return match;
-      }
-    }
-  );
-}
-
-// Main proxy endpoint
 app.get('/proxy/:url(*)', async (req, res) => {
   let targetUrl = '';
   
@@ -106,78 +53,34 @@ app.get('/proxy/:url(*)', async (req, res) => {
     
     console.log('Proxying:', targetUrl);
     
-    // Build realistic browser headers
     const fetchHeaders = {
-      'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Accept': req.headers['accept'] || 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-      'Accept-Language': req.headers['accept-language'] || 'en-US,en;q=0.9',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
       'Accept-Encoding': 'gzip, deflate, br',
-      'DNT': '1',
-      'Connection': 'keep-alive',
-      'Upgrade-Insecure-Requests': '1',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Sec-Fetch-User': '?1',
-      'Cache-Control': 'max-age=0'
     };
     
-    // Forward referer if present
-    if (req.headers['referer']) {
-      fetchHeaders['Referer'] = req.headers['referer'];
-    }
-    
-    // Forward cookies if present
-    if (req.headers['cookie']) {
-      fetchHeaders['Cookie'] = req.headers['cookie'];
-    }
-    
-    // Fetch the target URL
     const response = await fetch(targetUrl, {
       headers: fetchHeaders,
       redirect: 'follow'
     });
     
     const contentType = response.headers.get('content-type') || '';
-    
-    // Get response body
     let body;
+    
     if (contentType.includes('text/html')) {
       body = await response.text();
       body = rewriteHtml(body, targetUrl, '/proxy/');
-    } else if (contentType.includes('text/css') || contentType.includes('css')) {
-      body = await response.text();
-      body = rewriteCss(body, targetUrl, '/proxy/');
-    } else if (contentType.includes('javascript') || contentType.includes('application/javascript') || targetUrl.endsWith('.js')) {
-      body = await response.text();
-      // For most JS, don't rewrite - it breaks minified code
-      // Only rewrite if absolutely necessary
-    } else if (contentType.includes('text/') || contentType.includes('application/json') || contentType.includes('application/xml')) {
-      // Pass through other text content without rewriting
-      body = await response.text();
     } else {
-      // Binary content (images, etc.)
+      // Pass everything else through unchanged
       body = await response.buffer();
     }
     
-    // Copy relevant headers
     const headersToSend = {};
-    ['content-type', 'cache-control', 'expires', 'etag', 'last-modified'].forEach(header => {
+    ['content-type', 'cache-control', 'expires'].forEach(header => {
       const value = response.headers.get(header);
       if (value) headersToSend[header] = value;
     });
-    
-    // Forward cookies back to client
-    const setCookie = response.headers.get('set-cookie');
-    if (setCookie) {
-      headersToSend['set-cookie'] = setCookie;
-    }
-    
-    // Remove security headers that might block functionality
-    delete headersToSend['content-security-policy'];
-    delete headersToSend['content-security-policy-report-only'];
-    delete headersToSend['x-frame-options'];
-    delete headersToSend['x-content-type-options'];
     
     res.set(headersToSend);
     res.send(body);
@@ -185,27 +88,13 @@ app.get('/proxy/:url(*)', async (req, res) => {
   } catch (error) {
     console.error('Proxy error:', error);
     
-    // Check file extension from targetUrl if available, or from encoded URL path
+    // Silent fail for assets
     const urlToCheck = targetUrl || req.params.url;
-    
-    // Return empty responses for assets to prevent console errors
-    if (urlToCheck.match(/\.js(\?|$|#)/i) || urlToCheck.includes('javascript')) {
-      return res.status(200).type('application/javascript').end();
-    }
-    
-    if (urlToCheck.match(/\.css(\?|$|#)/i)) {
-      return res.status(200).type('text/css').end();
-    }
-    
-    if (urlToCheck.match(/\.(jpg|jpeg|png|gif|webp|svg|ico|woff|woff2|ttf|mp4|webm)(\?|$|#)/i)) {
+    if (urlToCheck.match(/\.(js|css|jpg|jpeg|png|gif|webp|svg|ico|woff|woff2|ttf|json|mp4|webm)/i)) {
       return res.status(404).end();
     }
     
-    if (urlToCheck.match(/\.json(\?|$|#)/i) || urlToCheck.includes('manifest')) {
-      return res.status(404).type('application/json').end();
-    }
-    
-    // HTML error page only for actual page requests
+    // Error page for HTML
     res.status(500).type('text/html').send(`
       <html>
         <head>
@@ -226,15 +115,14 @@ app.get('/proxy/:url(*)', async (req, res) => {
         </head>
         <body>
           <h1>blocked</h1>
-          <p>this site uses bot protection</p>
-          <a href="/">← try a different site</a>
+          <p>this site has bot protection</p>
+          <a href="/">← back</a>
         </body>
       </html>
     `);
   }
 });
 
-// API endpoint to encode URLs
 app.get('/api/encode', (req, res) => {
   const url = req.query.url;
   if (!url) {
