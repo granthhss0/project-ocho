@@ -66,6 +66,33 @@ app.get('*', async (req, res) => {
     res.status(404).send("Project Ocho: Resource Not Found");
 });
 
+// server.js - Update your catch-all route at the VERY bottom
+app.get('*', async (req, res) => {
+    const referer = req.headers.referer;
+
+    if (referer && referer.includes('/main?url=')) {
+        try {
+            const refUrl = new URL(referer);
+            const searchParams = new URLSearchParams(refUrl.search);
+            const rawTarget = searchParams.get('url');
+            
+            if (rawTarget) {
+                const targetOrigin = new URL(rawTarget).origin;
+                const actualTarget = targetOrigin + req.url;
+                
+                // Instead of a 404, we transparently proxy the leaked request
+                console.log(`Fixing Leak: ${actualTarget}`);
+                return res.redirect(`/main?url=${encodeURIComponent(actualTarget)}`);
+            }
+        } catch (e) {
+            console.error("Referer redirect failed", e);
+        }
+    }
+
+    // If all else fails, send a silent 404, NOT a text string
+    res.status(404).end(); 
+});
+
 // --- THE 404 FIX ---
 // If the app requests a path we don't recognize, it's likely a relative asset 
 // (like /scripts/main.js). We don't want to throw a 404.
