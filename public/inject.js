@@ -1,25 +1,27 @@
-// public/inject.js
 (function() {
-    const PROXY_PREFIX = '/main?url=';
-    const originUrl = new URL(new URLSearchParams(window.location.search).get('url')).origin;
+    const PROXY_URL = '/main?url=';
+    const targetOrigin = new URL(new URLSearchParams(window.location.search).get('url')).origin;
 
-    // 1. Hook Fetch
-    const oldFetch = window.fetch;
-    window.fetch = function(url, options) {
-        if (typeof url === 'string' && !url.startsWith(window.location.origin)) {
-            let fullUrl = url.startsWith('/') ? originUrl + url : url;
-            url = PROXY_PREFIX + encodeURIComponent(fullUrl);
+    // Hook Fetch calls
+    const originalFetch = window.fetch;
+    window.fetch = function(input, init) {
+        if (typeof input === 'string' && !input.startsWith('http') && !input.startsWith(PROXY_URL)) {
+            input = PROXY_URL + encodeURIComponent(targetOrigin + (input.startsWith('/') ? '' : '/') + input);
         }
-        return oldFetch(url, options);
+        return originalFetch(input, init);
     };
 
-    // 2. Hook XMLHttpRequest (For older API calls)
-    const oldOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url) {
-        if (typeof url === 'string' && !url.startsWith(window.location.origin)) {
-            let fullUrl = url.startsWith('/') ? originUrl + url : url;
-            url = PROXY_PREFIX + encodeURIComponent(fullUrl);
-        }
-        return oldOpen.apply(this, arguments);
-    };
+    // Hook Script insertions (helps with TikTok's dynamic loading)
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            mutation.addedNodes.forEach((node) => {
+                if (node.tagName === 'SCRIPT' && node.src && !node.src.includes(window.location.host)) {
+                    const originalSrc = node.src;
+                    node.src = window.location.origin + PROXY_URL + encodeURIComponent(originalSrc);
+                }
+            });
+        });
+    });
+
+    observer.observe(document.documentElement, { childList: true, subtree: true });
 })();
