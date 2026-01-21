@@ -2,23 +2,22 @@
 const Rewriter = {
     html: (code, origin) => {
         const proxyPrefix = '/main?url=';
+        
+        // Inject our hook at the very beginning of the <head>
+        let rewritten = code.replace('<head>', `<head><script src="/inject.js"></script>`);
 
-        return code.replace(/(src|href|action)="([^"]*)"/gi, (match, attr, url) => {
+        // Fix standard attributes
+        rewritten = rewritten.replace(/(src|href|action)="([^"]*)"/gi, (match, attr, url) => {
+            if (url.startsWith('data:') || url.startsWith('blob:')) return match;
+            
             let newUrl = url;
-
-            // Handle relative paths (e.g., /style.css -> https://tiktok.com/style.css)
-            if (url.startsWith('/') && !url.startsWith('//')) {
-                newUrl = origin + url;
-            } 
-            // Handle protocol-relative (e.g., //cdn.com)
-            else if (url.startsWith('//')) {
-                newUrl = 'https:' + url;
-            }
-
-            // Proxify the final absolute URL
+            if (url.startsWith('/') && !url.startsWith('//')) newUrl = origin + url;
+            else if (url.startsWith('//')) newUrl = 'https:' + url;
+            
             return `${attr}="${proxyPrefix}${encodeURIComponent(newUrl)}"`;
         });
+
+        return rewritten;
     }
 };
-
 if (typeof module !== 'undefined') module.exports = Rewriter;
