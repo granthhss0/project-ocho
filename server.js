@@ -49,7 +49,26 @@ app.get('/proxy/:url(*)', async (req, res) => {
   
   try {
     const encodedUrl = req.params.url;
-    targetUrl = decodeProxyUrl(encodedUrl);
+    
+    // Validate encoded URL exists
+    if (!encodedUrl) {
+      return res.status(400).send('Invalid request');
+    }
+    
+    try {
+      targetUrl = decodeProxyUrl(encodedUrl);
+    } catch (decodeError) {
+      console.error('Decode error:', decodeError);
+      return res.status(400).send('Invalid URL encoding');
+    }
+    
+    // Validate decoded URL
+    try {
+      new URL(targetUrl);
+    } catch (urlError) {
+      console.error('Invalid URL:', targetUrl);
+      return res.status(400).send('Invalid URL');
+    }
     
     console.log('Proxying:', targetUrl);
     
@@ -62,8 +81,14 @@ app.get('/proxy/:url(*)', async (req, res) => {
     
     const response = await fetch(targetUrl, {
       headers: fetchHeaders,
-      redirect: 'follow'
+      redirect: 'follow',
+      timeout: 10000
     });
+    
+    if (!response.ok) {
+      console.error('Fetch failed:', response.status, response.statusText);
+      throw new Error(`HTTP ${response.status}`);
+    }
     
     const contentType = response.headers.get('content-type') || '';
     let body;
@@ -86,10 +111,15 @@ app.get('/proxy/:url(*)', async (req, res) => {
     res.send(body);
     
   } catch (error) {
-    console.error('Proxy error:', error);
+    console.error('Proxy error:', error.message, error.stack);
+    
+    // Check if response was already sent
+    if (res.headersSent) {
+      return;
+    }
     
     // Silent fail for assets
-    const urlToCheck = targetUrl || req.params.url;
+    const urlToCheck = targetUrl || req.params.url || '';
     if (urlToCheck.match(/\.(js|css|jpg|jpeg|png|gif|webp|svg|ico|woff|woff2|ttf|json|mp4|webm)/i)) {
       return res.status(404).end();
     }
@@ -149,4 +179,13 @@ app.get('/api/encode', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Project Ocho running on http://0.0.0.0:${PORT}`);
+});
+
+// Global error handlers
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
