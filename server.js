@@ -4,7 +4,7 @@ const { URL } = require('url');
 const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 // Serve static files
 app.use(express.static('public'));
@@ -209,6 +209,6 @@ app.get('/api/encode', (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Project Ocho running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Project Ocho running on http://0.0.0.0:${PORT}`);
 });
