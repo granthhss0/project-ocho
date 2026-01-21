@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Project Ocho</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 50px; background: #1a1a1a; color: white; }
+        input { padding: 10px; width: 300px; border-radius: 5px; border: none; }
+        button { padding: 10px 20px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Project Ocho</h1>
+    <form id="proxy-form">
+        <input type="text" id="url" placeholder="https://google.com" required>
+        <button type="submit">Go</button>
+    </form>
+
+    <script>
+        // Register the Service Worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js', { scope: '/' })
+                .then(() => console.log('Ocho Interceptor Active'))
+                .catch(err => console.error('Interceptor Failed:', err));
+        }
+
+        document.getElementById('proxy-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const target = document.getElementById('url').value;
+            // Redirect to our relay endpoint
+            window.location.href = `/main?url=${encodeURIComponent(target)}`;
+        });
+    </script>
+</body>
+</html>
