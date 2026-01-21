@@ -105,7 +105,7 @@ app.get('/ocho/:url(*)', async (req, res) => {
     const response = await fetch(targetUrl, {
       headers: fetchHeaders,
       redirect: 'follow',
-      timeout: 10000
+      signal: AbortSignal.timeout(15000) // 15 second timeout
     });
     
     if (!response.ok) {
@@ -114,23 +114,43 @@ app.get('/ocho/:url(*)', async (req, res) => {
     }
     
     const contentType = response.headers.get('content-type') || '';
+    console.log('Content-Type:', contentType);
     let body;
     
     // Determine what we're actually serving
     if (contentType.includes('text/html')) {
+      const text = await response.text();
+      console.log('HTML size:', text.length);
+      body = rewriteHtml(text, targetUrl, '/ocho/');
+    } else if (contentType.includes('javascript') || contentType.includes('json') || contentType.includes('text/css')) {
+      // For text content, just pass through
       body = await response.text();
-      body = rewriteHtml(body, targetUrl, '/ocho/');
-    } else if (contentType.includes('javascript') || contentType.includes('json')) {
-      // For JS/JSON, return as text to avoid CORB
-      body = await response.text();
-    } else if (contentType.includes('text/css')) {
-      body = await response.text();
-    } else if (contentType.includes('image') || contentType.includes('font') || contentType.includes('video')) {
-      // Binary content
-      body = await response.buffer();
+      console.log('Text size:', body.length);
     } else {
-      // Default to buffer for unknown types
-      body = await response.buffer();
+      // For binary content, use streaming
+      console.log('Binary content - streaming');
+      
+      // Set headers first
+      const headersToSend = {};
+      if (contentType) {
+        headersToSend['content-type'] = contentType;
+      }
+      ['cache-control', 'expires', 'etag', 'last-modified'].forEach(header => {
+        const value = response.headers.get(header);
+        if (value) headersToSend[header] = value;
+      });
+      delete headersToSend['x-content-type-options'];
+      delete headersToSend['content-security-policy'];
+      delete headersToSend['x-frame-options'];
+      headersToSend['Access-Control-Allow-Origin'] = '*';
+      headersToSend['Cross-Origin-Resource-Policy'] = 'cross-origin';
+      headersToSend['Cross-Origin-Embedder-Policy'] = 'unsafe-none';
+      
+      res.set(headersToSend);
+      
+      // Stream the response
+      response.body.pipe(res);
+      return; // Exit early for streaming
     }
     
     const headersToSend = {};
@@ -157,7 +177,17 @@ app.get('/ocho/:url(*)', async (req, res) => {
     headersToSend['Cross-Origin-Embedder-Policy'] = 'unsafe-none';
     
     res.set(headersToSend);
-    res.send(body);
+    
+    // Send response safely
+    try {
+      res.send(body);
+      console.log('Response sent successfully');
+    } catch (sendError) {
+      console.error('Error sending response:', sendError);
+      if (!res.headersSent) {
+        res.status(500).end();
+      }
+    }
     
   } catch (error) {
     console.error('Proxy error:', error.message, error.stack);
