@@ -64,15 +64,22 @@ app.get('/ocho/:url(*)', async (req, res) => {
   console.log('Query:', req.query);
   
   try {
-    const encodedUrl = req.params.url;
+    let encodedUrl = req.params.url;
     
     // Validate encoded URL exists
     if (!encodedUrl) {
       return res.status(400).send('Invalid request');
     }
     
+    // Handle query parameters - they should stay as-is, not be decoded
+    const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+    
     try {
       targetUrl = decodeProxyUrl(encodedUrl);
+      // Append original query params to decoded URL
+      if (queryString) {
+        targetUrl += queryString;
+      }
     } catch (decodeError) {
       console.error('Decode error:', decodeError);
       return res.status(400).send('Invalid URL encoding');
