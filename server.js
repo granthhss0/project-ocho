@@ -43,6 +43,29 @@ app.get('/main', async (req, res) => {
     }
 });
 
+// server.js update
+app.get('*', async (req, res) => {
+    // If it's a static file we actually have, serve it
+    const localPath = path.join(__dirname, 'public', req.path);
+    if (require('fs').existsSync(localPath)) {
+        return res.sendFile(localPath);
+    }
+
+    // --- LEAK PROTECTION ---
+    // If we don't have the file, check if the request came from a proxied page
+    const referer = req.headers.referer;
+    if (referer && referer.includes('/main?url=')) {
+        const refUrl = new URL(referer);
+        const targetOrigin = new URL(decodeURIComponent(refUrl.searchParams.get('url'))).origin;
+        const actualTarget = targetOrigin + req.url;
+        
+        console.log(`Redirecting leaked request: ${actualTarget}`);
+        return res.redirect(`/main?url=${encodeURIComponent(actualTarget)}`);
+    }
+
+    res.status(404).send("Project Ocho: Resource Not Found");
+});
+
 // --- THE 404 FIX ---
 // If the app requests a path we don't recognize, it's likely a relative asset 
 // (like /scripts/main.js). We don't want to throw a 404.
