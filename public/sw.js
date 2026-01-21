@@ -23,7 +23,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   
   // Only intercept requests to our proxy endpoint
-  if (url.pathname.startsWith('/proxy/')) {
+  if (url.pathname.startsWith('/ocho/')) {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
