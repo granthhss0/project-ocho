@@ -30,6 +30,18 @@
             // Redirect to our relay endpoint
             window.location.href = `/main?url=${encodeURIComponent(target)}`;
         });
+
+        document.getElementById('proxy-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    let target = document.getElementById('url').value.trim();
+
+    // Auto-fix URL before sending
+    if (!target.startsWith('http://') && !target.startsWith('https://')) {
+        target = 'https://' + target;
+    }
+
+    window.location.href = `/main?url=${encodeURIComponent(target)}`;
+});
     </script>
 </body>
 </html>
