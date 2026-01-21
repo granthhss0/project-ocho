@@ -104,11 +104,35 @@ app.get('/proxy/:url(*)', async (req, res) => {
     
     console.log('Proxying:', targetUrl);
     
+    // Build realistic browser headers
+    const fetchHeaders = {
+      'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Accept': req.headers['accept'] || 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': req.headers['accept-language'] || 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Cache-Control': 'max-age=0'
+    };
+    
+    // Forward referer if present
+    if (req.headers['referer']) {
+      fetchHeaders['Referer'] = req.headers['referer'];
+    }
+    
+    // Forward cookies if present
+    if (req.headers['cookie']) {
+      fetchHeaders['Cookie'] = req.headers['cookie'];
+    }
+    
     // Fetch the target URL
     const response = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0',
-      },
+      headers: fetchHeaders,
       redirect: 'follow'
     });
     
@@ -136,14 +160,22 @@ app.get('/proxy/:url(*)', async (req, res) => {
     
     // Copy relevant headers
     const headersToSend = {};
-    ['content-type', 'cache-control', 'expires'].forEach(header => {
+    ['content-type', 'cache-control', 'expires', 'etag', 'last-modified'].forEach(header => {
       const value = response.headers.get(header);
       if (value) headersToSend[header] = value;
     });
     
-    // Remove CSP headers that might block functionality
+    // Forward cookies back to client
+    const setCookie = response.headers.get('set-cookie');
+    if (setCookie) {
+      headersToSend['set-cookie'] = setCookie;
+    }
+    
+    // Remove security headers that might block functionality
     delete headersToSend['content-security-policy'];
+    delete headersToSend['content-security-policy-report-only'];
     delete headersToSend['x-frame-options'];
+    delete headersToSend['x-content-type-options'];
     
     res.set(headersToSend);
     res.send(body);
