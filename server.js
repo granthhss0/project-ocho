@@ -119,24 +119,16 @@ app.get('/proxy/:url(*)', async (req, res) => {
     if (contentType.includes('text/html')) {
       body = await response.text();
       body = rewriteHtml(body, targetUrl, '/proxy/');
-    } else if (contentType.includes('text/css')) {
+    } else if (contentType.includes('text/css') || contentType.includes('css')) {
       body = await response.text();
       body = rewriteCss(body, targetUrl, '/proxy/');
-    } else if (contentType.includes('javascript')) {
+    } else if (contentType.includes('javascript') || contentType.includes('application/javascript') || targetUrl.endsWith('.js')) {
       body = await response.text();
-      // Basic JS rewriting
-      body = body.replace(
-        /(window\.location|document\.location)(\.href)?(\s*=\s*["']([^"']+)["'])/g,
-        (match, loc, href, assign, url) => {
-          try {
-            const absoluteUrl = new URL(url, targetUrl).href;
-            const encoded = encodeProxyUrl(absoluteUrl);
-            return `${loc}${href || ''}${assign.replace(url, '/proxy/' + encoded)}`;
-          } catch {
-            return match;
-          }
-        }
-      );
+      // For most JS, don't rewrite - it breaks minified code
+      // Only rewrite if absolutely necessary
+    } else if (contentType.includes('text/') || contentType.includes('application/json') || contentType.includes('application/xml')) {
+      // Pass through other text content without rewriting
+      body = await response.text();
     } else {
       // Binary content (images, etc.)
       body = await response.buffer();
@@ -158,6 +150,21 @@ app.get('/proxy/:url(*)', async (req, res) => {
     
   } catch (error) {
     console.error('Proxy error:', error);
+    
+    // For non-HTML requests (like JS, CSS, images), return appropriate error
+    const acceptHeader = req.headers.accept || '';
+    
+    if (acceptHeader.includes('application/javascript') || req.params.url.endsWith('.js')) {
+      res.status(500).type('application/javascript').send('// Error loading resource');
+      return;
+    }
+    
+    if (acceptHeader.includes('text/css') || req.params.url.endsWith('.css')) {
+      res.status(500).type('text/css').send('/* Error loading resource */');
+      return;
+    }
+    
+    // For HTML or other requests, show error page
     res.status(500).send(`
       <html>
         <head>
