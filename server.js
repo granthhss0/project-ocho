@@ -188,27 +188,28 @@ app.get('/proxy/:url(*)', async (req, res) => {
     // Check file extension from targetUrl if available, or from encoded URL path
     const urlToCheck = targetUrl || req.params.url;
     
-    // Return appropriate error based on content type
-    if (urlToCheck.match(/\.js(\?|$)/i) || urlToCheck.includes('javascript')) {
-      return res.status(200).type('application/javascript').send('');
+    // Return empty responses for assets to prevent console errors
+    if (urlToCheck.match(/\.js(\?|$|#)/i) || urlToCheck.includes('javascript')) {
+      return res.status(200).type('application/javascript').end();
     }
     
-    if (urlToCheck.match(/\.css(\?|$)/i)) {
-      return res.status(200).type('text/css').send('');
+    if (urlToCheck.match(/\.css(\?|$|#)/i)) {
+      return res.status(200).type('text/css').end();
     }
     
-    if (urlToCheck.match(/\.(jpg|jpeg|png|gif|webp|svg|ico|woff|woff2|ttf|mp4|webm)(\?|$)/i)) {
+    if (urlToCheck.match(/\.(jpg|jpeg|png|gif|webp|svg|ico|woff|woff2|ttf|mp4|webm)(\?|$|#)/i)) {
       return res.status(404).end();
     }
     
-    if (urlToCheck.match(/\.json(\?|$)/i) || urlToCheck.includes('manifest')) {
-      return res.status(200).type('application/json').send('{}');
+    if (urlToCheck.match(/\.json(\?|$|#)/i) || urlToCheck.includes('manifest')) {
+      return res.status(404).type('application/json').end();
     }
     
-    // HTML error page
-    res.status(500).send(`
+    // HTML error page only for actual page requests
+    res.status(500).type('text/html').send(`
       <html>
         <head>
+          <meta charset="UTF-8">
           <style>
             body { 
               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
