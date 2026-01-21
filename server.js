@@ -1,114 +1,50 @@
-// server.js
 const express = require('express');
 const fetch = require('node-fetch');
 const path = require('path');
 const Rewriter = require('./public/rewriter');
 const app = express();
 
+// Serve the 'public' folder (sw.js, inject.js, index.html)
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/main', async (req, res) => {
     let targetUrl = req.query.url;
     if (!targetUrl) return res.status(400).send("No URL provided");
 
-    // --- AUTOMATIC HTTPS LOGIC ---
+    // Auto-fix protocol
     if (!/^https?:\/\//i.test(targetUrl)) {
         targetUrl = 'https://' + targetUrl;
     }
 
     try {
         const response = await fetch(targetUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0.0.0 Safari/537.36' },
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9'
+            },
             redirect: 'follow'
         });
 
-        // --- STRIP SECURITY HEADERS ---
-        // This stops the "404" and "Refused to load" errors
-        res.removeHeader('Content-Security-Policy');
-        res.removeHeader('X-Frame-Options');
+        // Strip security headers that stop sites from running on a different domain
+        const headersToStrip = [
+            'content-security-policy',
+            'content-security-policy-report-only',
+            'x-frame-options',
+            'x-content-type-options',
+            'cross-origin-opener-policy'
+        ];
         
-        const contentType = response.headers.get('content-type');
-        res.set('Content-Type', contentType);
-
-        if (contentType && contentType.includes('text/html')) {
-            let body = await response.text();
-            const origin = new URL(targetUrl).origin;
-            body = Rewriter.html(body, origin);
-            return res.send(body);
-        }
-
-        response.body.pipe(res);
-    } catch (err) {
-        res.status(500).send("Proxy Error: " + err.message);
-    }
-});
-
-// server.js update
-app.get('*', async (req, res) => {
-    // If it's a static file we actually have, serve it
-    const localPath = path.join(__dirname, 'public', req.path);
-    if (require('fs').existsSync(localPath)) {
-        return res.sendFile(localPath);
-    }
-
-    // --- LEAK PROTECTION ---
-    // If we don't have the file, check if the request came from a proxied page
-    const referer = req.headers.referer;
-    if (referer && referer.includes('/main?url=')) {
-        const refUrl = new URL(referer);
-        const targetOrigin = new URL(decodeURIComponent(refUrl.searchParams.get('url'))).origin;
-        const actualTarget = targetOrigin + req.url;
-        
-        console.log(`Redirecting leaked request: ${actualTarget}`);
-        return res.redirect(`/main?url=${encodeURIComponent(actualTarget)}`);
-    }
-
-    res.status(404).send("Project Ocho: Resource Not Found");
-});
-
-// server.js - Update your catch-all route at the VERY bottom
-app.get('*', async (req, res) => {
-    const referer = req.headers.referer;
-
-    if (referer && referer.includes('/main?url=')) {
-        try {
-            const refUrl = new URL(referer);
-            const searchParams = new URLSearchParams(refUrl.search);
-            const rawTarget = searchParams.get('url');
-            
-            if (rawTarget) {
-                const targetOrigin = new URL(rawTarget).origin;
-                const actualTarget = targetOrigin + req.url;
-                
-                // Instead of a 404, we transparently proxy the leaked request
-                console.log(`Fixing Leak: ${actualTarget}`);
-                return res.redirect(`/main?url=${encodeURIComponent(actualTarget)}`);
+        const responseHeaders = response.headers.raw();
+        Object.keys(responseHeaders).forEach(key => {
+            if (!headersToStrip.includes(key.toLowerCase())) {
+                res.setHeader(key, responseHeaders[key]);
             }
-        } catch (e) {
-            console.error("Referer redirect failed", e);
-        }
-    }
-
-    // If all else fails, send a silent 404, NOT a text string
-    res.status(404).end(); 
-});
-
-// server.js - Update the /main route
-app.get('/main', async (req, res) => {
-    let targetUrl = req.query.url;
-    if (!targetUrl) return res.status(400).send("No URL");
-
-    if (!targetUrl.startsWith('http')) targetUrl = 'https://' + targetUrl;
-
-    try {
-        const response = await fetch(targetUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0.0.0 Safari/537.36' }
         });
 
         const contentType = response.headers.get('content-type') || '';
-        res.setHeader('Content-Type', contentType);
-
-        // ONLY rewrite if it is actually HTML
+        
+        // Only rewrite HTML; pipe everything else (JS, CSS, Images, JSON) directly
         if (contentType.includes('text/html')) {
             let body = await response.text();
             const origin = new URL(targetUrl).origin;
@@ -116,20 +52,32 @@ app.get('/main', async (req, res) => {
             return res.send(body);
         }
 
-        // For JS, CSS, JSON, and Images, just pipe the raw data
         response.body.pipe(res);
 
     } catch (err) {
-        res.status(500).send("Proxy Error");
+        console.error("Relay Error:", err.message);
+        res.status(500).send("Proxy Error: " + err.message);
     }
 });
 
-// --- THE 404 FIX ---
-// If the app requests a path we don't recognize, it's likely a relative asset 
-// (like /scripts/main.js). We don't want to throw a 404.
-app.get('*', (req, res) => {
-    res.status(404).send("Project Ocho: Use the search bar to load a site first.");
+// The Catch-All: Fixes "leaked" requests (e.g., /api/data) by using the Referer
+app.get('*', async (req, res) => {
+    const referer = req.headers.referer;
+
+    if (referer && referer.includes('/main?url=')) {
+        try {
+            const refUrl = new URL(referer);
+            const rawTarget = refUrl.searchParams.get('url');
+            if (rawTarget) {
+                const targetOrigin = new URL(rawTarget).origin;
+                const actualTarget = targetOrigin + req.url;
+                return res.redirect(`/main?url=${encodeURIComponent(actualTarget)}`);
+            }
+        } catch (e) { /* ignore parse errors */ }
+    }
+    // Return an empty 404 so JSON parsers don't crash on "Project Ocho" text
+    res.status(404).end();
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', () => console.log(`Ocho live on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Project Ocho active on port ${PORT}`));
