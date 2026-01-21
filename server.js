@@ -12,6 +12,11 @@ app.get('/main', async (req, res) => {
     const targetUrl = req.query.url;
     if (!targetUrl) return res.status(400).send("No URL provided");
 
+    // Inside your app.get('/main') logic, before res.send(body):
+res.removeHeader('Content-Security-Policy');
+res.removeHeader('X-Frame-Options');
+res.removeHeader('Content-Security-Policy-Report-Only');
+
     try {
         const response = await fetch(targetUrl);
         res.status(response.status);
