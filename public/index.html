@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Ocho</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 2rem;
+            font-weight: 300;
+            letter-spacing: -1px;
+        }
+
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 2rem;
+        }
+
+        #urlInput {
+            flex: 1;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            padding: 15px 20px;
+            font-size: 1rem;
+            color: #fff;
+            border-radius: 8px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #urlInput:focus {
+            border-color: #555;
+        }
+
+        #urlInput::placeholder {
+            color: #666;
+        }
+
+        #goButton {
+            background: #fff;
+            color: #000;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #goButton:hover {
+            background: #e0e0e0;
+        }
+
+        .error {
+            background: #1a0000;
+            border: 1px solid #330000;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+            color: #ff6666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>project ocho</h1>
+
+        <div class="search-box">
+            <input 
+                type="text" 
+                id="urlInput" 
+                placeholder="enter url..."
+                autocomplete="off"
+            >
+            <button id="goButton">go</button>
+        </div>
+
+        <div class="error" id="errorMsg"></div>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(err => {
+                console.log('SW registration failed:', err);
+            });
+        }
+
+        const urlInput = document.getElementById('urlInput');
+        const goButton = document.getElementById('goButton');
+        const errorMsg = document.getElementById('errorMsg');
+
+        async function navigateToUrl(url) {
+            try {
+                errorMsg.style.display = 'none';
+                
+                let targetUrl = url.trim();
+                
+                if (!targetUrl.includes('.') && !targetUrl.startsWith('http')) {
+                    targetUrl = 'https://www.google.com/search?q=' + encodeURIComponent(targetUrl);
+                }
+                
+                if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+                    targetUrl = 'https://' + targetUrl;
+                }
+
+                const response = await fetch(`/api/encode?url=${encodeURIComponent(targetUrl)}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                window.location.href = data.proxyUrl;
+            } catch (error) {
+                errorMsg.textContent = error.message;
+                errorMsg.style.display = 'block';
+            }
+        }
+
+        goButton.addEventListener('click', () => {
+            if (urlInput.value) navigateToUrl(urlInput.value);
+        });
+
+        urlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && urlInput.value) {
+                navigateToUrl(urlInput.value);
+            }
+        });
+
+        urlInput.focus();
+    </script>
+</body>
+</html>
