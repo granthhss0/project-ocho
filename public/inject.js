@@ -1,27 +1,27 @@
+// public/inject.js
 (function() {
-    const PROXY_URL = '/main?url=';
-    const targetOrigin = new URL(new URLSearchParams(window.location.search).get('url')).origin;
+    const prefix = '/main?url=';
+    const currentUrl = new URLSearchParams(window.location.search).get('url');
+    if (!currentUrl) return;
+    const origin = new URL(currentUrl).origin;
 
-    // Hook Fetch calls
-    const originalFetch = window.fetch;
-    window.fetch = function(input, init) {
-        if (typeof input === 'string' && !input.startsWith('http') && !input.startsWith(PROXY_URL)) {
-            input = PROXY_URL + encodeURIComponent(targetOrigin + (input.startsWith('/') ? '' : '/') + input);
+    // Fix Fetch
+    const nativeFetch = window.fetch;
+    window.fetch = function(uri, options) {
+        if (typeof uri === 'string' && !uri.startsWith('http') && !uri.startsWith(prefix)) {
+            uri = prefix + encodeURIComponent(origin + (uri.startsWith('/') ? '' : '/') + uri);
         }
-        return originalFetch(input, init);
+        return nativeFetch(uri, options);
     };
 
-    // Hook Script insertions (helps with TikTok's dynamic loading)
-    const observer = new MutationObserver((mutations) => {
-        mutations.forEach((mutation) => {
-            mutation.addedNodes.forEach((node) => {
-                if (node.tagName === 'SCRIPT' && node.src && !node.src.includes(window.location.host)) {
-                    const originalSrc = node.src;
-                    node.src = window.location.origin + PROXY_URL + encodeURIComponent(originalSrc);
-                }
-            });
-        });
-    });
+    // Fix XMLHttpRequests (Old school AJAX TikTok uses)
+    const nativeOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+        if (typeof url === 'string' && !url.startsWith('http') && !url.startsWith(prefix)) {
+            url = prefix + encodeURIComponent(origin + (url.startsWith('/') ? '' : '/') + url);
+        }
+        nativeOpen.apply(this, arguments);
+    };
 
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    console.log("Ocho Injector Active: Intercepting background traffic.");
 })();
