@@ -93,6 +93,37 @@ app.get('*', async (req, res) => {
     res.status(404).end(); 
 });
 
+// server.js - Update the /main route
+app.get('/main', async (req, res) => {
+    let targetUrl = req.query.url;
+    if (!targetUrl) return res.status(400).send("No URL");
+
+    if (!targetUrl.startsWith('http')) targetUrl = 'https://' + targetUrl;
+
+    try {
+        const response = await fetch(targetUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0.0.0 Safari/537.36' }
+        });
+
+        const contentType = response.headers.get('content-type') || '';
+        res.setHeader('Content-Type', contentType);
+
+        // ONLY rewrite if it is actually HTML
+        if (contentType.includes('text/html')) {
+            let body = await response.text();
+            const origin = new URL(targetUrl).origin;
+            body = Rewriter.html(body, origin);
+            return res.send(body);
+        }
+
+        // For JS, CSS, JSON, and Images, just pipe the raw data
+        response.body.pipe(res);
+
+    } catch (err) {
+        res.status(500).send("Proxy Error");
+    }
+});
+
 // --- THE 404 FIX ---
 // If the app requests a path we don't recognize, it's likely a relative asset 
 // (like /scripts/main.js). We don't want to throw a 404.
