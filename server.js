@@ -119,14 +119,18 @@ app.get('/ocho/:url(*)', async (req, res) => {
     
     // Check content length to avoid memory issues
     const contentLength = parseInt(response.headers.get('content-length') || '0');
-    if (contentLength > 50 * 1024 * 1024) { // 50MB limit
+    if (contentLength > 10 * 1024 * 1024) { // 10MB limit
       console.error('Content too large:', contentLength);
-      return res.status(413).send('Content too large');
+      return res.status(413).end();
     }
     
     // Determine what we're actually serving
     if (contentType.includes('text/html')) {
       const text = await response.text();
+      if (text.length > 5 * 1024 * 1024) { // 5MB HTML limit
+        console.error('HTML too large');
+        return res.status(413).end();
+      }
       console.log('HTML size:', text.length);
       body = rewriteHtml(text, targetUrl, '/ocho/');
       
@@ -137,9 +141,17 @@ app.get('/ocho/:url(*)', async (req, res) => {
     } else if (contentType.includes('text/') || contentType.includes('javascript') || contentType.includes('json')) {
       // For text content, just pass through
       body = await response.text();
+      if (body.length > 10 * 1024 * 1024) { // 10MB text limit
+        console.error('Text content too large');
+        return res.status(413).end();
+      }
       console.log('Text size:', body.length);
     } else {
-      // Binary content
+      // Binary content - strict limit
+      if (contentLength > 5 * 1024 * 1024) { // 5MB binary limit
+        console.error('Binary too large:', contentLength);
+        return res.status(413).end();
+      }
       const buffer = await response.arrayBuffer();
       body = Buffer.from(buffer);
       console.log('Binary size:', body.length);
