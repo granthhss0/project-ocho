@@ -98,9 +98,11 @@ function rewriteCss(css, baseUrl, proxyPrefix) {
 
 // Main proxy endpoint
 app.get('/proxy/:url(*)', async (req, res) => {
+  let targetUrl = '';
+  
   try {
     const encodedUrl = req.params.url;
-    const targetUrl = decodeProxyUrl(encodedUrl);
+    targetUrl = decodeProxyUrl(encodedUrl);
     
     console.log('Proxying:', targetUrl);
     
@@ -183,30 +185,27 @@ app.get('/proxy/:url(*)', async (req, res) => {
   } catch (error) {
     console.error('Proxy error:', error);
     
-    // Decode URL to check file type
-    let targetUrl = '';
-    try {
-      targetUrl = decodeProxyUrl(req.params.url);
-    } catch (e) {
-      targetUrl = '';
+    // Check file extension from targetUrl if available, or from encoded URL path
+    const urlToCheck = targetUrl || req.params.url;
+    
+    // Return appropriate error based on content type
+    if (urlToCheck.match(/\.js(\?|$)/i) || urlToCheck.includes('javascript')) {
+      return res.status(200).type('application/javascript').send('');
     }
     
-    // For JavaScript files, return empty comment
-    if (targetUrl.includes('.js') || targetUrl.includes('javascript')) {
-      return res.status(200).type('application/javascript').send('// Failed to load');
+    if (urlToCheck.match(/\.css(\?|$)/i)) {
+      return res.status(200).type('text/css').send('');
     }
     
-    // For CSS files, return empty comment
-    if (targetUrl.includes('.css') || targetUrl.includes('css')) {
-      return res.status(200).type('text/css').send('/* Failed to load */');
+    if (urlToCheck.match(/\.(jpg|jpeg|png|gif|webp|svg|ico|woff|woff2|ttf|mp4|webm)(\?|$)/i)) {
+      return res.status(404).end();
     }
     
-    // For images and other binary, return 404
-    if (targetUrl.match(/\.(jpg|jpeg|png|gif|webp|svg|ico|woff|woff2|ttf)$/i)) {
-      return res.status(404).send('');
+    if (urlToCheck.match(/\.json(\?|$)/i) || urlToCheck.includes('manifest')) {
+      return res.status(200).type('application/json').send('{}');
     }
     
-    // For HTML or other requests, show error page
+    // HTML error page
     res.status(500).send(`
       <html>
         <head>
@@ -219,14 +218,15 @@ app.get('/proxy/:url(*)', async (req, res) => {
               text-align: center; 
             }
             h1 { font-weight: 300; }
+            p { color: #666; margin: 20px 0; }
             a { color: #888; text-decoration: none; }
             a:hover { color: #fff; }
           </style>
         </head>
         <body>
-          <h1>error</h1>
-          <p>${error.message}</p>
-          <a href="/">← back</a>
+          <h1>blocked</h1>
+          <p>this site uses bot protection</p>
+          <a href="/">← try a different site</a>
         </body>
       </html>
     `);
