@@ -117,47 +117,48 @@ app.get('/ocho/:url(*)', async (req, res) => {
     console.log('Content-Type:', contentType);
     let body;
     
+    // Check content length to avoid memory issues
+    const contentLength = parseInt(response.headers.get('content-length') || '0');
+    if (contentLength > 50 * 1024 * 1024) { // 50MB limit
+      console.error('Content too large:', contentLength);
+      return res.status(413).send('Content too large');
+    }
+    
     // Determine what we're actually serving
     if (contentType.includes('text/html')) {
       const text = await response.text();
       console.log('HTML size:', text.length);
       body = rewriteHtml(text, targetUrl, '/ocho/');
-    } else if (contentType.includes('javascript') || contentType.includes('json') || contentType.includes('text/css')) {
+      
+      // Ensure DOCTYPE for standards mode
+      if (!body.toLowerCase().startsWith('<!doctype')) {
+        body = '<!DOCTYPE html>\n' + body;
+      }
+    } else if (contentType.includes('text/') || contentType.includes('javascript') || contentType.includes('json')) {
       // For text content, just pass through
       body = await response.text();
       console.log('Text size:', body.length);
     } else {
-      // For binary content, use streaming
-      console.log('Binary content - streaming');
-      
-      // Set headers first
-      const headersToSend = {};
-      if (contentType) {
-        headersToSend['content-type'] = contentType;
-      }
-      ['cache-control', 'expires', 'etag', 'last-modified'].forEach(header => {
-        const value = response.headers.get(header);
-        if (value) headersToSend[header] = value;
-      });
-      delete headersToSend['x-content-type-options'];
-      delete headersToSend['content-security-policy'];
-      delete headersToSend['x-frame-options'];
-      headersToSend['Access-Control-Allow-Origin'] = '*';
-      headersToSend['Cross-Origin-Resource-Policy'] = 'cross-origin';
-      headersToSend['Cross-Origin-Embedder-Policy'] = 'unsafe-none';
-      
-      res.set(headersToSend);
-      
-      // Stream the response
-      response.body.pipe(res);
-      return; // Exit early for streaming
+      // Binary content
+      const buffer = await response.arrayBuffer();
+      body = Buffer.from(buffer);
+      console.log('Binary size:', body.length);
     }
     
     const headersToSend = {};
     
-    // Set correct content-type
+    // CRITICAL: Set correct content-type to avoid CORB
     if (contentType) {
       headersToSend['content-type'] = contentType;
+    } else {
+      // Guess content type from URL if missing
+      if (targetUrl.endsWith('.js')) {
+        headersToSend['content-type'] = 'application/javascript; charset=utf-8';
+      } else if (targetUrl.endsWith('.css')) {
+        headersToSend['content-type'] = 'text/css; charset=utf-8';
+      } else if (targetUrl.endsWith('.json')) {
+        headersToSend['content-type'] = 'application/json; charset=utf-8';
+      }
     }
     
     // Copy safe headers
@@ -171,10 +172,12 @@ app.get('/ocho/:url(*)', async (req, res) => {
     delete headersToSend['content-security-policy'];
     delete headersToSend['x-frame-options'];
     
-    // Force CORS headers
+    // CRITICAL CORS headers to prevent CORB
     headersToSend['Access-Control-Allow-Origin'] = '*';
+    headersToSend['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
+    headersToSend['Access-Control-Allow-Headers'] = '*';
     headersToSend['Cross-Origin-Resource-Policy'] = 'cross-origin';
-    headersToSend['Cross-Origin-Embedder-Policy'] = 'unsafe-none';
+    headersToSend['X-Content-Type-Options'] = 'nosniff';
     
     res.set(headersToSend);
     
