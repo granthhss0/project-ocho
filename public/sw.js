@@ -1,23 +1,26 @@
 // public/sw.js
 self.addEventListener('fetch', (event) => {
-    const request = event.request;
-    const url = new URL(request.url);
+    const url = new URL(event.request.url);
 
-    // 1. Ignore requests to our own server (like the UI or the SW itself)
-    if (url.origin === location.origin) {
-        return;
+    // Skip our own internal files (index.html, rewriter.js, etc.)
+    if (url.origin === location.origin && !url.pathname.startsWith('/main')) {
+        // Check if it's a relative path from a proxied site
+        // If the referrer is /main, we should proxy this request too
+        if (event.request.referrer.includes('/main?url=')) {
+            const refUrl = new URL(event.request.referrer);
+            const targetOrigin = new URL(decodeURIComponent(refUrl.searchParams.get('url'))).origin;
+            const newTarget = targetOrigin + url.pathname + url.search;
+            
+            event.respondWith(fetch(`/main?url=${encodeURIComponent(newTarget)}`));
+            return;
+        }
+        return; 
     }
 
-    // 2. Intercept all other requests and route them through our relay
-    // This catches links, scripts, and fetch() calls made by the proxied site
-    const proxiedUrl = `/main?url=${encodeURIComponent(request.url)}`;
-
-    event.respondWith(
-        fetch(proxiedUrl, {
-            method: request.method,
-            headers: request.headers,
-            mode: request.mode,
-            credentials: request.credentials
-        })
-    );
+    // Standard proxy interception
+    if (!url.pathname.startsWith('/main')) {
+        event.respondWith(
+            fetch(`/main?url=${encodeURIComponent(event.request.url)}`)
+        );
+    }
 });
