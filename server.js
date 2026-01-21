@@ -9,6 +9,11 @@ const PORT = process.env.PORT || 3000;
 // Serve static files
 app.use(express.static('public'));
 
+// Serve service worker from root
+app.get('/sw.js', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'sw.js'));
+});
+
 // URL encoding/decoding functions
 function encodeProxyUrl(url) {
   return Buffer.from(url).toString('base64')
@@ -119,7 +124,7 @@ app.get('/proxy/:url(*)', async (req, res) => {
       body = rewriteCss(body, targetUrl, '/proxy/');
     } else if (contentType.includes('javascript')) {
       body = await response.text();
-      // Basic JS rewriting - can be expanded
+      // Basic JS rewriting
       body = body.replace(
         /(window\.location|document\.location)(\.href)?(\s*=\s*["']([^"']+)["'])/g,
         (match, loc, href, assign, url) => {
@@ -155,18 +160,31 @@ app.get('/proxy/:url(*)', async (req, res) => {
     console.error('Proxy error:', error);
     res.status(500).send(`
       <html>
-        <body style="font-family: sans-serif; padding: 40px; text-align: center;">
-          <h1>Proxy Error</h1>
-          <p>Failed to load the requested page.</p>
-          <p style="color: #666;">${error.message}</p>
-          <a href="/" style="color: #0066cc;">← Go back</a>
+        <head>
+          <style>
+            body { 
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+              background: #0a0a0a; 
+              color: #fff; 
+              padding: 40px; 
+              text-align: center; 
+            }
+            h1 { font-weight: 300; }
+            a { color: #888; text-decoration: none; }
+            a:hover { color: #fff; }
+          </style>
+        </head>
+        <body>
+          <h1>error</h1>
+          <p>${error.message}</p>
+          <a href="/">← back</a>
         </body>
       </html>
     `);
   }
 });
 
-// API endpoint to encode URLs (for the frontend)
+// API endpoint to encode URLs
 app.get('/api/encode', (req, res) => {
   const url = req.query.url;
   if (!url) {
@@ -174,13 +192,11 @@ app.get('/api/encode', (req, res) => {
   }
   
   try {
-    // Ensure URL has protocol
     let fullUrl = url;
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       fullUrl = 'https://' + url;
     }
     
-    // Validate URL
     new URL(fullUrl);
     
     const encoded = encodeProxyUrl(fullUrl);
@@ -194,5 +210,5 @@ app.get('/api/encode', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Proxy server running on http://localhost:${PORT}`);
+  console.log(`Project Ocho running on http://localhost:${PORT}`);
 });
