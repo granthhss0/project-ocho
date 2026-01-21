@@ -58,6 +58,11 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
 app.get('/ocho/:url(*)', async (req, res) => {
   let targetUrl = '';
   
+  console.log('=== OCHO REQUEST ===');
+  console.log('Path:', req.path);
+  console.log('Params:', req.params);
+  console.log('Query:', req.query);
+  
   try {
     const encodedUrl = req.params.url;
     
@@ -212,6 +217,35 @@ app.get('/api/encode', (req, res) => {
   } catch (error) {
     res.status(400).json({ error: 'Invalid URL' });
   }
+});
+
+// Catch-all 404 handler
+app.use((req, res) => {
+  console.log('404:', req.method, req.url);
+  res.status(404).type('text/html').send(`
+    <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0a0a; 
+            color: #fff; 
+            padding: 40px; 
+            text-align: center; 
+          }
+          h1 { font-weight: 300; }
+          a { color: #888; text-decoration: none; }
+          a:hover { color: #fff; }
+        </style>
+      </head>
+      <body>
+        <h1>404</h1>
+        <p>page not found</p>
+        <a href="/">← home</a>
+      </body>
+    </html>
+  `);
 });
 
 app.listen(PORT, '0.0.0.0', () => {
