@@ -1,20 +1,24 @@
 // public/rewriter.js
 const Rewriter = {
-    // This adds your proxy prefix to any URL it finds
-    proxifyUrl: (url, proxyPrefix) => {
-        if (!url || url.startsWith('data:') || url.startsWith('blob:')) return url;
-        // Logic: if it's already proxied, leave it. If not, add prefix.
-        return url.startsWith(proxyPrefix) ? url : proxyPrefix + encodeURIComponent(url);
-    },
+    html: (code, origin) => {
+        const proxyPrefix = '/main?url=';
 
-    // This scans an HTML string and replaces attributes
-    html: (code, proxyPrefix) => {
-        return code
-            .replace(/(src|href|action|srcset)="([^"]*)"/gi, (match, attr, url) => {
-                return `${attr}="${Rewriter.proxifyUrl(url, proxyPrefix)}"`;
-            })
-            .replace(/url\(['"]?([^'"\)]+)['"]?\)/gi, (match, url) => {
-                return `url("${Rewriter.proxifyUrl(url, proxyPrefix)}")`;
-            });
+        return code.replace(/(src|href|action)="([^"]*)"/gi, (match, attr, url) => {
+            let newUrl = url;
+
+            // Handle relative paths (e.g., /style.css -> https://tiktok.com/style.css)
+            if (url.startsWith('/') && !url.startsWith('//')) {
+                newUrl = origin + url;
+            } 
+            // Handle protocol-relative (e.g., //cdn.com)
+            else if (url.startsWith('//')) {
+                newUrl = 'https:' + url;
+            }
+
+            // Proxify the final absolute URL
+            return `${attr}="${proxyPrefix}${encodeURIComponent(newUrl)}"`;
+        });
     }
 };
+
+if (typeof module !== 'undefined') module.exports = Rewriter;
