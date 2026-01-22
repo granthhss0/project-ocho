@@ -1,48 +1,30 @@
-const CACHE_NAME = 'ocho-proxy-v1';
-
-self.addEventListener('install', (event) => {
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
-  );
-  return self.clients.claim();
-});
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+
+  // If the request is for our own server files, let it go
+  if (url.pathname === '/' || url.pathname === '/sw.js' || url.pathname.startsWith('/api/')) return;
   
-  // Only intercept requests to our proxy endpoint
-  if (url.pathname.startsWith('/ocho/')) {
-    event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          // Clone the response before returning
-          const responseClone = response.clone();
-          
-          // Optionally cache successful responses
-          if (response.ok) {
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseClone);
-            });
-          }
-          
-          return response;
-        })
-        .catch(() => {
-          // Try to return cached version if network fails
-          return caches.match(event.request);
-        })
-    );
-  }
+  // If it's already proxied, let it go
+  if (url.pathname.startsWith('/ocho/')) return;
+
+  // LEAK DETECTOR: If a site tries to fetch a relative path (e.g. /config.json)
+  // we find the original target URL from the current page address
+  event.respondWith(
+    clients.get(event.clientId).then(client => {
+      if (!client) return fetch(event.request);
+      
+      const clientUrl = new URL(client.url);
+      if (clientUrl.pathname.startsWith('/ocho/')) {
+        const encodedPart = clientUrl.pathname.split('/ocho/')[1];
+        // This is a bit complex, but essentially we reconstruct the leaked URL
+        // and wrap it back into our Base64 proxy
+        // To keep it simple for now, we'll just let the server catch-all handle it
+        return fetch(event.request);
+      }
+      return fetch(event.request);
+    })
+  );
 });
