@@ -159,37 +159,37 @@ app.get('/ocho/:url(*)', async (req, res) => {
     
     const headersToSend = {};
     
-    // CRITICAL: Set correct content-type to avoid CORB
+    // CRITICAL: Ensure proper content-type with charset
     if (contentType) {
-      headersToSend['content-type'] = contentType;
-    } else {
-      // Guess content type from URL if missing
-      if (targetUrl.endsWith('.js')) {
-        headersToSend['content-type'] = 'application/javascript; charset=utf-8';
-      } else if (targetUrl.endsWith('.css')) {
-        headersToSend['content-type'] = 'text/css; charset=utf-8';
-      } else if (targetUrl.endsWith('.json')) {
-        headersToSend['content-type'] = 'application/json; charset=utf-8';
+      // Always add charset for text content
+      if (contentType.includes('text/') || contentType.includes('javascript') || contentType.includes('json')) {
+        if (!contentType.includes('charset')) {
+          headersToSend['content-type'] = contentType + '; charset=utf-8';
+        } else {
+          headersToSend['content-type'] = contentType;
+        }
+      } else {
+        headersToSend['content-type'] = contentType;
       }
     }
     
     // Copy safe headers
-    ['cache-control', 'expires', 'etag', 'last-modified'].forEach(header => {
+    ['cache-control', 'expires'].forEach(header => {
       const value = response.headers.get(header);
       if (value) headersToSend[header] = value;
     });
     
-    // Remove problematic headers
-    delete headersToSend['x-content-type-options'];
-    delete headersToSend['content-security-policy'];
-    delete headersToSend['x-frame-options'];
+    // CRITICAL: Remove ALL restrictive headers
+    // Don't copy any security headers that could interfere
     
-    // CRITICAL CORS headers to prevent CORB
+    // CRITICAL CORS configuration to prevent CORB
     headersToSend['Access-Control-Allow-Origin'] = '*';
-    headersToSend['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
+    headersToSend['Access-Control-Allow-Methods'] = '*';
     headersToSend['Access-Control-Allow-Headers'] = '*';
-    headersToSend['Cross-Origin-Resource-Policy'] = 'cross-origin';
-    headersToSend['X-Content-Type-Options'] = 'nosniff';
+    headersToSend['Access-Control-Expose-Headers'] = '*';
+    
+    // Tell browser this is a CORS proxy and to allow everything
+    headersToSend['Timing-Allow-Origin'] = '*';
     
     res.set(headersToSend);
     
