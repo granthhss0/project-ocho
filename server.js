@@ -271,33 +271,26 @@ app.get('/api/encode', (req, res) => {
   }
 });
 
-// Catch-all 404 handler
-app.use((req, res) => {
-  console.log('404:', req.method, req.url);
-  res.status(404).type('text/html').send(`
-    <html>
-      <head>
-        <meta charset="UTF-8">
-        <style>
-          body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #0a0a0a; 
-            color: #fff; 
-            padding: 40px; 
-            text-align: center; 
-          }
-          h1 { font-weight: 300; }
-          a { color: #888; text-decoration: none; }
-          a:hover { color: #fff; }
-        </style>
-      </head>
-      <body>
-        <h1>404</h1>
-        <p>page not found</p>
-        <a href="/">← home</a>
-      </body>
-    </html>
-  `);
+app.get('*', (req, res) => {
+  const referer = req.headers.referer;
+  
+  if (referer && referer.includes('/ocho/')) {
+    try {
+      // Find the encoded target from the referer
+      const refPath = new URL(referer).pathname;
+      const encodedTarget = refPath.split('/ocho/')[1].split('?')[0];
+      const targetOrigin = new URL(decodeProxyUrl(encodedTarget)).origin;
+      
+      // Re-encode the leaked path
+      const actualTarget = targetOrigin + req.url;
+      console.log('Redirecting Leak:', actualTarget);
+      return res.redirect(`/ocho/${encodeProxyUrl(actualTarget)}`);
+    } catch (e) {
+      console.error('Leak redirect failed');
+    }
+  }
+  
+  res.status(404).end(); // Send empty 404, NO HTML (prevents the "<" error)
 });
 
 // ... (your encoding/decoding functions)
