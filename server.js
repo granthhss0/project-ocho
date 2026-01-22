@@ -15,7 +15,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Use raw body parser for POST requests (fixes API calls)
+// Use raw body parser for POST requests
 app.use(express.raw({ type: '*/*', limit: '10mb' }));
 app.use(express.static('public'));
 
@@ -37,14 +37,14 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
   let rewritten = html;
   const origin = new URL(baseUrl).origin;
 
-  // A. Block Service Workers (The "Zombie" Fix)
+  // Block Service Workers
   rewritten = rewritten.replace(/navigator\.serviceWorker\.register/g, '(async()=>console.log("SW Blocked"))');
 
-  // B. Strip Security Headers & CSP
+  // Strip Security Headers & CSP
   rewritten = rewritten.replace(/<meta http-equiv="Content-Security-Policy".*?>/gi, '');
   rewritten = rewritten.replace(/integrity="sha[^"]*"/gi, '');
 
-  // C. Rewrite Links
+  // Rewrite Links
   rewritten = rewritten.replace(/(src|href)=["']([^"']+)["']/gi, (match, attr, url) => {
     if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('#')) return match;
     let absoluteUrl = url;
@@ -58,32 +58,46 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
     } catch (e) { return match; }
   });
 
+  // Inject base tag to help with relative URLs
+  if (!rewritten.includes('<base')) {
+    rewritten = rewritten.replace(/<head>/i, `<head><base href="${baseUrl}">`);
+  }
+
   return rewritten;
 }
 
-// 3. CORE PROXY LOGIC (Shared by main route and catch-all)
+// 3. CORE PROXY LOGIC
 async function doProxyRequest(targetUrl, req, res) {
   console.log(`Proxying: ${req.method} ${targetUrl}`);
 
   try {
     // Forward Request Headers
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': req.headers.accept || '*/*',
       'Accept-Encoding': 'identity', 
-      'Connection': 'keep-alive',
-      'Content-Type': req.headers['content-type']
+      'Accept-Language': req.headers['accept-language'] || 'en-US,en;q=0.9',
+      'Connection': 'keep-alive'
     };
 
-    // Forward Cookies (Critical for APIs)
+    // Forward important headers
+    if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
     if (req.headers.cookie) headers['Cookie'] = req.headers.cookie;
-    if (req.headers.referer) headers['Referer'] = targetUrl; // Fake the referer
+    if (req.headers.referer) {
+      // Set referer to the target origin to avoid blocking
+      try {
+        const targetOrigin = new URL(targetUrl).origin;
+        headers['Referer'] = targetOrigin;
+      } catch (e) {
+        headers['Referer'] = targetUrl;
+      }
+    }
 
     const fetchOptions = {
       method: req.method,
       headers: headers,
       redirect: 'follow',
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(30000)
     };
 
     // Forward Body for POST/PUT
@@ -105,7 +119,12 @@ async function doProxyRequest(targetUrl, req, res) {
     const contentType = response.headers.get('content-type');
     if (contentType) headersToSend['content-type'] = contentType;
 
+    // Forward Set-Cookie headers
+    const setCookie = response.headers.get('set-cookie');
+    if (setCookie) headersToSend['set-cookie'] = setCookie;
+
     res.set(headersToSend);
+    res.status(response.status);
 
     // Handle HTML Rewriting vs Direct Streaming
     if (contentType && contentType.includes('text/html')) {
@@ -115,17 +134,23 @@ async function doProxyRequest(targetUrl, req, res) {
          text = '<!DOCTYPE html>\n' + text;
       }
       res.send(text);
+    } else if (contentType && (contentType.includes('application/json') || contentType.includes('text/plain'))) {
+      // For JSON/text, send as-is
+      const text = await response.text();
+      res.send(text);
     } else {
+      // Stream binary content
       response.body.pipe(res);
     }
   } catch (error) {
     console.error(`Proxy Fail: ${targetUrl} - ${error.message}`);
-    if (!res.headersSent) res.status(500).end();
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message });
+    }
   }
 }
 
 // 4. THE "KILLER" SERVICE WORKER
-// This tricks the browser into unregistering the bad SW
 app.get('/sw.js', (req, res) => {
   res.set('Content-Type', 'application/javascript');
   res.send(`
@@ -138,7 +163,15 @@ app.get('/sw.js', (req, res) => {
   `);
 });
 
-// 5. MAIN ROUTE
+// 5. API ENCODER
+app.get('/api/encode', (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).json({ error: 'URL required' });
+  const fullUrl = url.startsWith('http') ? url : 'https://' + url;
+  res.json({ encoded: encodeProxyUrl(fullUrl), proxyUrl: `/ocho/${encodeProxyUrl(fullUrl)}` });
+});
+
+// 6. MAIN ROUTE
 app.use('/ocho/:url(*)', (req, res) => {
   const encodedUrl = req.params.url;
   try {
@@ -152,33 +185,32 @@ app.use('/ocho/:url(*)', (req, res) => {
   }
 });
 
-// 6. API ENCODER
-app.get('/api/encode', (req, res) => {
-  const url = req.query.url;
-  if (!url) return res.status(400).json({ error: 'URL required' });
-  const fullUrl = url.startsWith('http') ? url : 'https://' + url;
-  res.json({ encoded: encodeProxyUrl(fullUrl), proxyUrl: `/ocho/${encodeProxyUrl(fullUrl)}` });
-});
-
-// 7. INTELLIGENT CATCH-ALL (Fixes 500 Errors on APIs)
+// 7. ENHANCED CATCH-ALL - Handles leaked API requests
 app.all('*', (req, res) => {
   const referer = req.headers.referer;
   
+  // Try to fix leaked requests by reconstructing the target URL
   if (referer && referer.includes('/ocho/')) {
     try {
+      // Extract the base URL from referer
       const refPath = new URL(referer).pathname;
       const encodedTarget = refPath.split('/ocho/')[1].split('?')[0];
       const targetOrigin = new URL(decodeProxyUrl(encodedTarget)).origin;
       
+      // Construct the full target URL
       const fixedUrl = targetOrigin + req.url;
       
-      // Instead of redirecting (which breaks POST), we proxy directly
+      console.log(`Catch-all fixing: ${req.url} -> ${fixedUrl}`);
+      
+      // Proxy the request directly (don't redirect)
       return doProxyRequest(fixedUrl, req, res);
     } catch (e) {
-      console.error('Leak Fix Failed:', e);
+      console.error('Catch-all fix failed:', e.message);
     }
   }
-  res.status(404).send('Not Found');
+  
+  console.log(`404 Not Found: ${req.url}`);
+  res.status(404).json({ error: 'Not Found', path: req.url });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
