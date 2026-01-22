@@ -96,7 +96,7 @@
             <input 
                 type="text" 
                 id="urlInput" 
-                placeholder="enter url..."
+                placeholder="enter url or search..."
                 autocomplete="off"
             >
             <button id="goButton">go</button>
@@ -106,6 +106,7 @@
     </div>
 
     <script>
+        // Register the killer service worker
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js').catch(err => {
                 console.log('SW registration failed:', err);
@@ -122,14 +123,17 @@
                 
                 let targetUrl = url.trim();
                 
+                // Smart detection: if no dots and not starting with http, treat as search
                 if (!targetUrl.includes('.') && !targetUrl.startsWith('http')) {
                     targetUrl = 'https://www.google.com/search?q=' + encodeURIComponent(targetUrl);
                 }
                 
+                // Add https:// if missing protocol
                 if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
                     targetUrl = 'https://' + targetUrl;
                 }
 
+                // Encode the URL using the API
                 const response = await fetch(`/api/encode?url=${encodeURIComponent(targetUrl)}`);
                 const data = await response.json();
 
@@ -137,6 +141,7 @@
                     throw new Error(data.error);
                 }
 
+                // Navigate to proxied URL
                 window.location.href = data.proxyUrl;
             } catch (error) {
                 errorMsg.textContent = error.message;
