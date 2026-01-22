@@ -108,20 +108,25 @@ async function doProxyRequest(targetUrl, req, res) {
     const response = await fetch(targetUrl, fetchOptions);
 
     // Prepare Response Headers
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    
     const headersToSend = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': '*',
       'Access-Control-Allow-Headers': '*',
+      'Access-Control-Expose-Headers': '*',
       'Content-Security-Policy': "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; style-src * 'unsafe-inline';",
-      'X-Frame-Options': 'ALLOWALL'
+      'X-Frame-Options': 'ALLOWALL',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Type': contentType
     };
-
-    const contentType = response.headers.get('content-type');
-    if (contentType) headersToSend['content-type'] = contentType;
 
     // Forward Set-Cookie headers
     const setCookie = response.headers.get('set-cookie');
     if (setCookie) headersToSend['set-cookie'] = setCookie;
+
+    // Remove headers that might cause CORB
+    delete headersToSend['X-Content-Type-Options'];
 
     res.set(headersToSend);
     res.status(response.status);
@@ -133,6 +138,21 @@ async function doProxyRequest(targetUrl, req, res) {
       if (!text.toLowerCase().trim().startsWith('<!doctype')) {
          text = '<!DOCTYPE html>\n' + text;
       }
+      res.send(text);
+    } else if (contentType && contentType.includes('application/javascript')) {
+      // For JavaScript, ensure proper content type and send as text
+      const text = await response.text();
+      res.set('Content-Type', 'application/javascript; charset=utf-8');
+      res.send(text);
+    } else if (contentType && contentType.includes('text/javascript')) {
+      // Handle text/javascript
+      const text = await response.text();
+      res.set('Content-Type', 'text/javascript; charset=utf-8');
+      res.send(text);
+    } else if (contentType && contentType.includes('text/css')) {
+      // Handle CSS
+      const text = await response.text();
+      res.set('Content-Type', 'text/css; charset=utf-8');
       res.send(text);
     } else if (contentType && (contentType.includes('application/json') || contentType.includes('text/plain'))) {
       // For JSON/text, send as-is
