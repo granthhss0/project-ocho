@@ -160,6 +160,7 @@ app.get('/ocho/:url(*)', async (req, res) => {
     }
     
     const headersToSend = {};
+    html = html.replace(/navigator\.serviceWorker\.register/g, 'console.log');
     
     // CRITICAL: Ensure proper content-type with charset
     if (contentType) {
@@ -335,6 +336,17 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
     headersToSend['Access-Control-Allow-Origin'] = '*';
     headersToSend['Access-Control-Allow-Methods'] = '*';
     headersToSend['Access-Control-Allow-Headers'] = '*';
+
+html = html.replace(/<meta http-equiv="Content-Security-Policy".*?>/gi, '');
+
+// Catch stray TikTok API calls that escape the proxy prefix
+app.all('*', (req, res, next) => {
+    if (!req.url.startsWith('/ocho/') && req.headers.referer && req.headers.referer.includes('/ocho/')) {
+        const targetUrl = 'https://www.tiktok.com' + req.url;
+        return res.redirect(`/ocho/${Buffer.from(targetUrl).toString('base64')}`);
+    }
+    next();
+});
 
     // ... continue with the rest of your header copying logic ...
 app.listen(PORT, '0.0.0.0', () => {
