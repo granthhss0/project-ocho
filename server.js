@@ -332,7 +332,7 @@ headersToSend['X-Frame-Options'] = 'ALLOWALL';
 headersToSend['Access-Control-Allow-Origin'] = '*';
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Project Ocho running on http://0.0.0.0:${PORT}`);
+  console.log(`Project Ocho is now listening on 0.0.0.0:${PORT}`);
 });
 
 // Global error handlers
