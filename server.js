@@ -300,6 +300,42 @@ app.use((req, res) => {
   `);
 });
 
+// ... (your encoding/decoding functions)
+
+function rewriteHtml(html, baseUrl, proxyPrefix) {
+  let rewritten = html;
+  const origin = new URL(baseUrl).origin;
+
+  // 1. Remove SRI (Integrity) - THIS IS WHY GITHUB BREAKS
+  rewritten = rewritten.replace(/integrity="sha[^"]*"/gi, '');
+
+  // 2. Comprehensive Rewrite (including scripts!)
+  // This regex catches src and href and wraps them in your Base64 proxy
+  rewritten = rewritten.replace(/(src|href)=["']([^"']+)["']/gi, (match, attr, url) => {
+    if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('#')) return match;
+    
+    let absoluteUrl = url;
+    try {
+      if (url.startsWith('//')) absoluteUrl = 'https:' + url;
+      else if (url.startsWith('/')) absoluteUrl = origin + url;
+      else if (!url.startsWith('http')) absoluteUrl = origin + '/' + url;
+      
+      const encoded = encodeProxyUrl(absoluteUrl);
+      return `${attr}="${proxyPrefix}${encoded}"`;
+    } catch (e) {
+      return match;
+    }
+  });
+
+  return rewritten;
+}
+
+// Inside your app.get('/ocho/:url(*)') route, update the headers:
+// Add these to headersToSend to stop CORS crashes
+headersToSend['Content-Security-Policy'] = "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; style-src * 'unsafe-inline';";
+headersToSend['X-Frame-Options'] = 'ALLOWALL';
+headersToSend['Access-Control-Allow-Origin'] = '*';
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Project Ocho running on http://0.0.0.0:${PORT}`);
 });
