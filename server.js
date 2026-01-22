@@ -325,12 +325,18 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
   return rewritten;
 }
 
-// Inside your app.get('/ocho/:url(*)') route, update the headers:
-// Add these to headersToSend to stop CORS crashes
-headersToSend['Content-Security-Policy'] = "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; style-src * 'unsafe-inline';";
-headersToSend['X-Frame-Options'] = 'ALLOWALL';
-headersToSend['Access-Control-Allow-Origin'] = '*';
+// ... inside your app.get('/ocho/:url(*)') route ...
 
+    const headersToSend = {}; // Make sure this line exists!
+
+    // CRITICAL: Add these lines RIGHT HERE:
+    headersToSend['Content-Security-Policy'] = "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; style-src * 'unsafe-inline';";
+    headersToSend['X-Frame-Options'] = 'ALLOWALL';
+    headersToSend['Access-Control-Allow-Origin'] = '*';
+    headersToSend['Access-Control-Allow-Methods'] = '*';
+    headersToSend['Access-Control-Allow-Headers'] = '*';
+
+    // ... continue with the rest of your header copying logic ...
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Project Ocho is now listening on 0.0.0.0:${PORT}`);
 });
