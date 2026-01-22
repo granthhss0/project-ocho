@@ -15,6 +15,8 @@ app.use((req, res, next) => {
   next();
 });
 
+// Use raw body parser for POST requests (fixes API calls)
+app.use(express.raw({ type: '*/*', limit: '10mb' }));
 app.use(express.static('public'));
 
 // 2. HELPER FUNCTIONS
@@ -31,24 +33,20 @@ function decodeProxyUrl(encoded) {
   return Buffer.from(base64 + '='.repeat(padding), 'base64').toString('utf-8');
 }
 
-// 3. THE "SUPER" REWRITER (Combines all fixes)
 function rewriteHtml(html, baseUrl, proxyPrefix) {
   let rewritten = html;
   const origin = new URL(baseUrl).origin;
 
-  // A. Block Service Workers (Fixes the "Double Proxy" crash)
-  rewritten = rewritten.replace(/navigator\.serviceWorker\.register/g, 'console.log');
+  // A. Block Service Workers (The "Zombie" Fix)
+  rewritten = rewritten.replace(/navigator\.serviceWorker\.register/g, '(async()=>console.log("SW Blocked"))');
 
-  // B. Strip TikTok's Security Headers (CSP) inside HTML
+  // B. Strip Security Headers & CSP
   rewritten = rewritten.replace(/<meta http-equiv="Content-Security-Policy".*?>/gi, '');
-
-  // C. Remove Integrity checks (Fixes GitHub/TikTok breaking)
   rewritten = rewritten.replace(/integrity="sha[^"]*"/gi, '');
 
-  // D. Rewrite all Links (src/href) to point to our proxy
+  // C. Rewrite Links
   rewritten = rewritten.replace(/(src|href)=["']([^"']+)["']/gi, (match, attr, url) => {
     if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('#')) return match;
-    
     let absoluteUrl = url;
     try {
       if (url.startsWith('//')) absoluteUrl = 'https:' + url;
@@ -57,132 +55,132 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
       
       const encoded = encodeProxyUrl(absoluteUrl);
       return `${attr}="${proxyPrefix}${encoded}"`;
-    } catch (e) {
-      return match;
-    }
+    } catch (e) { return match; }
   });
 
   return rewritten;
 }
 
-// 4. MAIN PROXY ROUTE
-app.get('/ocho/:url(*)', async (req, res) => {
-  let targetUrl = '';
-  
-  console.log('=== OCHO REQUEST ===', req.path);
+// 3. CORE PROXY LOGIC (Shared by main route and catch-all)
+async function doProxyRequest(targetUrl, req, res) {
+  console.log(`Proxying: ${req.method} ${targetUrl}`);
 
   try {
-    const encodedUrl = req.params.url;
-    if (!encodedUrl) return res.status(400).send('Invalid request');
+    // Forward Request Headers
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': req.headers.accept || '*/*',
+      'Accept-Encoding': 'identity', 
+      'Connection': 'keep-alive',
+      'Content-Type': req.headers['content-type']
+    };
 
-    // Decode URL
-    try {
-      const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
-      targetUrl = decodeProxyUrl(encodedUrl);
-      if (queryString) targetUrl += queryString;
-      new URL(targetUrl); // Validate
-    } catch (e) {
-      console.error('URL Error:', e.message);
-      return res.status(400).send('Invalid URL encoding');
-    }
+    // Forward Cookies (Critical for APIs)
+    if (req.headers.cookie) headers['Cookie'] = req.headers.cookie;
+    if (req.headers.referer) headers['Referer'] = targetUrl; // Fake the referer
 
-    console.log('Proxying:', targetUrl);
-
-    // Fetch Target
-    const response = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': '*/*',
-        'Accept-Encoding': 'identity', // Critical fix for node-fetch
-        'Connection': 'keep-alive'
-      },
+    const fetchOptions = {
+      method: req.method,
+      headers: headers,
       redirect: 'follow',
       signal: AbortSignal.timeout(15000)
-    });
+    };
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    // Forward Body for POST/PUT
+    if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body && Buffer.isBuffer(req.body)) {
+      fetchOptions.body = req.body;
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
 
     // Prepare Response Headers
-    const headersToSend = {};
-    const contentType = response.headers.get('content-type') || '';
+    const headersToSend = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': '*',
+      'Access-Control-Allow-Headers': '*',
+      'Content-Security-Policy': "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; style-src * 'unsafe-inline';",
+      'X-Frame-Options': 'ALLOWALL'
+    };
 
-    // A. Security & CORS Headers (The fix for your crash)
-    headersToSend['Content-Security-Policy'] = "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; style-src * 'unsafe-inline';";
-    headersToSend['X-Frame-Options'] = 'ALLOWALL';
-    headersToSend['Access-Control-Allow-Origin'] = '*';
-    headersToSend['Access-Control-Allow-Methods'] = '*';
-    headersToSend['Access-Control-Allow-Headers'] = '*';
-
-    // B. Content Type
-    if (contentType) {
-      if ((contentType.includes('text/') || contentType.includes('json')) && !contentType.includes('charset')) {
-        headersToSend['content-type'] = contentType + '; charset=utf-8';
-      } else {
-        headersToSend['content-type'] = contentType;
-      }
-    }
+    const contentType = response.headers.get('content-type');
+    if (contentType) headersToSend['content-type'] = contentType;
 
     res.set(headersToSend);
 
-    // Handle Body (HTML vs Binary)
-    if (contentType.includes('text/html')) {
+    // Handle HTML Rewriting vs Direct Streaming
+    if (contentType && contentType.includes('text/html')) {
       let text = await response.text();
       text = rewriteHtml(text, targetUrl, '/ocho/');
-      // Ensure DOCTYPE
       if (!text.toLowerCase().trim().startsWith('<!doctype')) {
          text = '<!DOCTYPE html>\n' + text;
       }
       res.send(text);
     } else {
-      // Stream everything else directly
       response.body.pipe(res);
     }
-
   } catch (error) {
-    console.error('Proxy Error:', error.message);
-    if (!res.headersSent) res.status(500).send('Proxy Error: ' + error.message);
+    console.error(`Proxy Fail: ${targetUrl} - ${error.message}`);
+    if (!res.headersSent) res.status(500).end();
+  }
+}
+
+// 4. THE "KILLER" SERVICE WORKER
+// This tricks the browser into unregistering the bad SW
+app.get('/sw.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript');
+  res.send(`
+    self.addEventListener('install', () => self.skipWaiting());
+    self.addEventListener('activate', () => {
+      self.registration.unregister().then(() => {
+        console.log('Zombie Service Worker Killed');
+      });
+    });
+  `);
+});
+
+// 5. MAIN ROUTE
+app.use('/ocho/:url(*)', (req, res) => {
+  const encodedUrl = req.params.url;
+  try {
+    let targetUrl = decodeProxyUrl(encodedUrl);
+    const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+    if (queryString) targetUrl += queryString;
+    
+    doProxyRequest(targetUrl, req, res);
+  } catch (e) {
+    res.status(400).send('Invalid URL');
   }
 });
 
-// 5. API ENDPOINT (For your frontend input box)
+// 6. API ENCODER
 app.get('/api/encode', (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: 'URL required' });
-  try {
-    const fullUrl = url.startsWith('http') ? url : 'https://' + url;
-    const encoded = encodeProxyUrl(fullUrl);
-    res.json({ encoded, proxyUrl: `/ocho/${encoded}` });
-  } catch (e) {
-    res.status(400).json({ error: 'Invalid URL' });
-  }
+  const fullUrl = url.startsWith('http') ? url : 'https://' + url;
+  res.json({ encoded: encodeProxyUrl(fullUrl), proxyUrl: `/ocho/${encodeProxyUrl(fullUrl)}` });
 });
 
-// 6. CATCH-ALL REDIRECT (Fixes the /ttwid/check/ 404s)
-// If TikTok tries to load /ttwid/check/, this grabs it and redirects it back to the proxy.
+// 7. INTELLIGENT CATCH-ALL (Fixes 500 Errors on APIs)
 app.all('*', (req, res) => {
   const referer = req.headers.referer;
   
   if (referer && referer.includes('/ocho/')) {
     try {
-      // 1. Extract the original site URL from the Referer
       const refPath = new URL(referer).pathname;
-      const encodedTarget = refPath.split('/ocho/')[1].split('?')[0]; // grab the base64 part
-      const targetOrigin = new URL(decodeProxyUrl(encodedTarget)).origin; // get https://tiktok.com
+      const encodedTarget = refPath.split('/ocho/')[1].split('?')[0];
+      const targetOrigin = new URL(decodeProxyUrl(encodedTarget)).origin;
       
-      // 2. Combine it with the path the browser is trying to load
       const fixedUrl = targetOrigin + req.url;
       
-      console.log(`Catch-All: Redirecting stray request ${req.url} back to proxy`);
-      return res.redirect(`/ocho/${encodeProxyUrl(fixedUrl)}`);
+      // Instead of redirecting (which breaks POST), we proxy directly
+      return doProxyRequest(fixedUrl, req, res);
     } catch (e) {
-      console.error('Catch-All Error:', e);
+      console.error('Leak Fix Failed:', e);
     }
   }
-  
   res.status(404).send('Not Found');
 });
 
-// 7. START SERVER
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Project Ocho is live on 0.0.0.0:${PORT}`);
+  console.log(`Project Ocho listening on 0.0.0.0:${PORT}`);
 });
