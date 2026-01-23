@@ -306,18 +306,23 @@ app.all('*', (req, res) => {
     try {
       // Extract the base URL from referer
       const refPath = new URL(referer).pathname;
-      const encodedTarget = refPath.split('/ocho/')[1].split('?')[0].split('/')[0];
-      const targetOrigin = new URL(decodeProxyUrl(encodedTarget)).origin;
       
-      // Construct the full target URL
-      const fixedUrl = targetOrigin + req.url;
-      
-      console.log(`Catch-all fixing: ${req.url} -> ${fixedUrl}`);
-      
-      // Proxy the request directly (don't redirect)
-      return doProxyRequest(fixedUrl, req, res);
+      // Split correctly - may have /ocho/encodedurl/extra or just /ocho/encodedurl
+      const parts = refPath.split('/ocho/');
+      if (parts.length > 1) {
+        const encodedPart = parts[1].split('/')[0].split('?')[0];
+        const targetOrigin = new URL(decodeProxyUrl(encodedPart)).origin;
+        
+        // Construct the full target URL
+        const fixedUrl = targetOrigin + req.url;
+        
+        console.log(`Catch-all fixing: ${req.url} -> ${fixedUrl}`);
+        
+        // Proxy the request directly (don't redirect)
+        return doProxyRequest(fixedUrl, req, res);
+      }
     } catch (e) {
-      console.error('Catch-all fix failed:', e.message);
+      console.error('Catch-all fix failed:', e.message, 'for URL:', req.url);
     }
   }
   
