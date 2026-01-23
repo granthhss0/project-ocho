@@ -87,13 +87,29 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
       // Set correct base URL for the proxy
       (function() {
         const currentOrigin = window.location.origin;
+        const targetOrigin = '${origin}';
+        
+        // Intercept ALL navigation attempts
+        document.addEventListener('click', function(e) {
+          const link = e.target.closest('a');
+          if (link && link.href) {
+            const url = link.href;
+            // If it's trying to go to the real site, stop it and proxy it
+            if (url.startsWith(targetOrigin) || (!url.startsWith(currentOrigin) && !url.startsWith('javascript:') && !url.startsWith('mailto:') && !url.startsWith('tel:') && !url.startsWith('#'))) {
+              e.preventDefault();
+              const fullUrl = url.startsWith('http') ? url : targetOrigin + (url.startsWith('/') ? '' : '/') + url;
+              const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
+              window.location.href = currentOrigin + '/ocho/' + encoded;
+            }
+          }
+        }, true);
         
         // Proxy fetch wrapper
         window.__proxyFetch = function(url, options) {
           if (typeof url === 'string' && !url.startsWith('/ocho/') && !url.startsWith('data:') && !url.startsWith('blob:')) {
             let fullUrl = url;
             if (!url.startsWith('http')) {
-              fullUrl = url.startsWith('/') ? '${origin}' + url : '${origin}/' + url;
+              fullUrl = url.startsWith('/') ? targetOrigin + url : targetOrigin + '/' + url;
             }
             const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
             url = currentOrigin + '/ocho/' + encoded;
@@ -108,6 +124,20 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
             return window.__proxyFetch(url, options);
           }
           return originalFetch(url, options);
+        };
+        
+        // Override XMLHttpRequest
+        const originalXHROpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url, ...args) {
+          if (typeof url === 'string' && !url.startsWith('/ocho/') && !url.startsWith('data:') && !url.startsWith('blob:')) {
+            let fullUrl = url;
+            if (!url.startsWith('http')) {
+              fullUrl = url.startsWith('/') ? targetOrigin + url : targetOrigin + '/' + url;
+            }
+            const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
+            url = currentOrigin + '/ocho/' + encoded;
+          }
+          return originalXHROpen.call(this, method, url, ...args);
         };
         
         // Block service worker registration
@@ -276,7 +306,7 @@ app.all('*', (req, res) => {
     try {
       // Extract the base URL from referer
       const refPath = new URL(referer).pathname;
-      const encodedTarget = refPath.split('/ocho/')[1].split('?')[0];
+      const encodedTarget = refPath.split('/ocho/')[1].split('?')[0].split('/')[0];
       const targetOrigin = new URL(decodeProxyUrl(encodedTarget)).origin;
       
       // Construct the full target URL
@@ -291,7 +321,7 @@ app.all('*', (req, res) => {
     }
   }
   
-  console.log(`404 Not Found: ${req.url}`);
+  console.log(`404 Not Found: ${req.url} (referer: ${referer || 'none'})`);
   res.status(404).json({ error: 'Not Found', path: req.url });
 });
 
