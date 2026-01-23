@@ -54,48 +54,76 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
   // Rewrite fetch calls to go through proxy
   rewritten = rewritten.replace(/fetch\s*\(/g, 'window.__proxyFetch(');
 
-  // Rewrite Links
+  // Rewrite Links - USE RELATIVE PATHS, NOT ABSOLUTE
   rewritten = rewritten.replace(/(src|href)=["']([^"']+)["']/gi, (match, attr, url) => {
     if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('#') || url.startsWith('javascript:')) return match;
+    
+    // Skip if already proxied
+    if (url.includes('/ocho/')) return match;
+    
     let absoluteUrl = url;
     try {
       if (url.startsWith('//')) absoluteUrl = 'https:' + url;
       else if (url.startsWith('/')) absoluteUrl = origin + url;
-      else if (!url.startsWith('http')) absoluteUrl = origin + '/' + url;
+      else if (!url.startsWith('http')) {
+        // Handle relative URLs
+        const baseUrlObj = new URL(baseUrl);
+        const basePath = baseUrlObj.pathname.substring(0, baseUrlObj.pathname.lastIndexOf('/') + 1);
+        absoluteUrl = baseUrlObj.origin + basePath + url;
+      }
       
       const encoded = encodeProxyUrl(absoluteUrl);
+      // Return RELATIVE path, not absolute
       return `${attr}="${proxyPrefix}${encoded}"`;
-    } catch (e) { return match; }
+    } catch (e) { 
+      console.error('URL rewrite error:', e, url);
+      return match; 
+    }
   });
 
   // Inject proxy helper script at the top of <head>
   const proxyScript = `
     <script>
-      // Proxy fetch wrapper
-      window.__proxyFetch = function(url, options) {
-        if (typeof url === 'string' && !url.startsWith('/ocho/')) {
-          const fullUrl = url.startsWith('http') ? url : '${origin}' + (url.startsWith('/') ? '' : '/') + url;
-          const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
-          url = '/ocho/' + encoded;
+      // Set correct base URL for the proxy
+      (function() {
+        const currentOrigin = window.location.origin;
+        
+        // Proxy fetch wrapper
+        window.__proxyFetch = function(url, options) {
+          if (typeof url === 'string' && !url.startsWith('/ocho/') && !url.startsWith('data:') && !url.startsWith('blob:')) {
+            let fullUrl = url;
+            if (!url.startsWith('http')) {
+              fullUrl = url.startsWith('/') ? '${origin}' + url : '${origin}/' + url;
+            }
+            const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
+            url = currentOrigin + '/ocho/' + encoded;
+          }
+          return fetch(url, options);
+        };
+        
+        // Override fetch globally
+        const originalFetch = window.fetch;
+        window.fetch = function(url, options) {
+          if (typeof url === 'string' && !url.startsWith('/ocho/') && !url.startsWith('data:') && !url.startsWith('blob:')) {
+            return window.__proxyFetch(url, options);
+          }
+          return originalFetch(url, options);
+        };
+        
+        // Block service worker registration
+        if ('serviceWorker' in navigator) {
+          Object.defineProperty(navigator, 'serviceWorker', {
+            get: () => undefined
+          });
         }
-        return fetch(url, options);
-      };
-      
-      // Block service worker registration
-      if ('serviceWorker' in navigator) {
-        Object.defineProperty(navigator, 'serviceWorker', {
-          get: () => undefined
-        });
-      }
+      })();
     </script>
   `;
 
   rewritten = rewritten.replace(/<head>/i, '<head>' + proxyScript);
 
-  // Inject base tag
-  if (!rewritten.includes('<base')) {
-    rewritten = rewritten.replace(/<head>/i, `<head><base href="${baseUrl}">`);
-  }
+  // Inject base tag - REMOVE THIS, it causes the wrong origin issue
+  // The proxy script handles URL resolution instead
 
   return rewritten;
 }
