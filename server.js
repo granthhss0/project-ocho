@@ -37,16 +37,26 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
   let rewritten = html;
   const origin = new URL(baseUrl).origin;
 
-  // Block Service Workers
-  rewritten = rewritten.replace(/navigator\.serviceWorker\.register/g, '(async()=>console.log("SW Blocked"))');
+  // Block Service Workers aggressively
+  rewritten = rewritten.replace(/navigator\.serviceWorker/g, 'navigator.__blockedServiceWorker');
+  rewritten = rewritten.replace(/'serviceWorker'/g, "'__blockedServiceWorker'");
+  rewritten = rewritten.replace(/"serviceWorker"/g, '"__blockedServiceWorker"');
 
-  // Strip Security Headers & CSP
+  // Strip ALL security-related meta tags
   rewritten = rewritten.replace(/<meta http-equiv="Content-Security-Policy".*?>/gi, '');
-  rewritten = rewritten.replace(/integrity="sha[^"]*"/gi, '');
+  rewritten = rewritten.replace(/<meta.*?name="referrer".*?>/gi, '');
+  rewritten = rewritten.replace(/integrity="[^"]*"/gi, '');
+  rewritten = rewritten.replace(/crossorigin="[^"]*"/gi, '');
+
+  // Remove CORB-triggering attributes
+  rewritten = rewritten.replace(/\s+crossorigin/gi, '');
+  
+  // Rewrite fetch calls to go through proxy
+  rewritten = rewritten.replace(/fetch\s*\(/g, 'window.__proxyFetch(');
 
   // Rewrite Links
   rewritten = rewritten.replace(/(src|href)=["']([^"']+)["']/gi, (match, attr, url) => {
-    if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('#')) return match;
+    if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('#') || url.startsWith('javascript:')) return match;
     let absoluteUrl = url;
     try {
       if (url.startsWith('//')) absoluteUrl = 'https:' + url;
@@ -58,7 +68,31 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
     } catch (e) { return match; }
   });
 
-  // Inject base tag to help with relative URLs
+  // Inject proxy helper script at the top of <head>
+  const proxyScript = `
+    <script>
+      // Proxy fetch wrapper
+      window.__proxyFetch = function(url, options) {
+        if (typeof url === 'string' && !url.startsWith('/ocho/')) {
+          const fullUrl = url.startsWith('http') ? url : '${origin}' + (url.startsWith('/') ? '' : '/') + url;
+          const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
+          url = '/ocho/' + encoded;
+        }
+        return fetch(url, options);
+      };
+      
+      // Block service worker registration
+      if ('serviceWorker' in navigator) {
+        Object.defineProperty(navigator, 'serviceWorker', {
+          get: () => undefined
+        });
+      }
+    </script>
+  `;
+
+  rewritten = rewritten.replace(/<head>/i, '<head>' + proxyScript);
+
+  // Inject base tag
   if (!rewritten.includes('<base')) {
     rewritten = rewritten.replace(/<head>/i, `<head><base href="${baseUrl}">`);
   }
