@@ -225,39 +225,46 @@ async function doProxyRequest(targetUrl, req, res) {
 
     // Handle HTML Rewriting vs Direct Streaming
     if (contentType && contentType.includes('text/html')) {
-      let text = await response.text();
-      text = rewriteHtml(text, targetUrl, '/ocho/');
-      if (!text.toLowerCase().trim().startsWith('<!doctype')) {
-         text = '<!DOCTYPE html>\n' + text;
-      }
-      res.send(text);
+      const text = await response.text();
+      const rewritten = rewriteHtml(text, targetUrl, '/ocho/');
+      const final = rewritten.toLowerCase().trim().startsWith('<!doctype') 
+        ? rewritten 
+        : '<!DOCTYPE html>\n' + rewritten;
+      res.send(final);
     } else if (contentType && contentType.includes('application/javascript')) {
-      // For JavaScript, ensure proper content type and send as text
       const text = await response.text();
       res.set('Content-Type', 'application/javascript; charset=utf-8');
       res.send(text);
     } else if (contentType && contentType.includes('text/javascript')) {
-      // Handle text/javascript
       const text = await response.text();
       res.set('Content-Type', 'text/javascript; charset=utf-8');
       res.send(text);
     } else if (contentType && contentType.includes('text/css')) {
-      // Handle CSS
       const text = await response.text();
       res.set('Content-Type', 'text/css; charset=utf-8');
       res.send(text);
     } else if (contentType && (contentType.includes('application/json') || contentType.includes('text/plain'))) {
-      // For JSON/text, send as-is
       const text = await response.text();
       res.send(text);
     } else {
-      // Stream binary content
-      response.body.pipe(res);
+      // Stream binary content with proper cleanup
+      response.body.pipe(res).on('finish', () => {
+        response.body.destroy();
+      }).on('error', (err) => {
+        console.error('Stream error:', err);
+        response.body.destroy();
+        if (!res.headersSent) res.status(500).end();
+      });
     }
   } catch (error) {
     console.error(`Proxy Fail: ${targetUrl} - ${error.message}`);
     if (!res.headersSent) {
       res.status(500).json({ error: error.message });
+    }
+  } finally {
+    // Cleanup - force garbage collection hint
+    if (global.gc) {
+      global.gc();
     }
   }
 }
@@ -306,18 +313,23 @@ app.all('*', (req, res) => {
     try {
       // Extract the base URL from referer
       const refPath = new URL(referer).pathname;
-      const encodedTarget = refPath.split('/ocho/')[1].split('?')[0].split('/')[0];
-      const targetOrigin = new URL(decodeProxyUrl(encodedTarget)).origin;
       
-      // Construct the full target URL
-      const fixedUrl = targetOrigin + req.url;
-      
-      console.log(`Catch-all fixing: ${req.url} -> ${fixedUrl}`);
-      
-      // Proxy the request directly (don't redirect)
-      return doProxyRequest(fixedUrl, req, res);
+      // Split correctly - may have /ocho/encodedurl/extra or just /ocho/encodedurl
+      const parts = refPath.split('/ocho/');
+      if (parts.length > 1) {
+        const encodedPart = parts[1].split('/')[0].split('?')[0];
+        const targetOrigin = new URL(decodeProxyUrl(encodedPart)).origin;
+        
+        // Construct the full target URL
+        const fixedUrl = targetOrigin + req.url;
+        
+        console.log(`Catch-all fixing: ${req.url} -> ${fixedUrl}`);
+        
+        // Proxy the request directly (don't redirect)
+        return doProxyRequest(fixedUrl, req, res);
+      }
     } catch (e) {
-      console.error('Catch-all fix failed:', e.message);
+      console.error('Catch-all fix failed:', e.message, 'for URL:', req.url);
     }
   }
   
