@@ -3,6 +3,16 @@ primary_region = "iad"
 
 [build]
 
+[deploy]
+  release_command = "echo 'Deploying Project Ocho'"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+
+[processes]
+  app = "node --max-old-space-size=400 --expose-gc server.js"
+
 [http_service]
   internal_port = 8080
   force_https = true
