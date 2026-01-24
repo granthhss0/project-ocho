@@ -158,7 +158,7 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
   return rewritten;
 }
 
-// 3. CORE PROXY LOGIC
+// CORE PROXY LOGIC (Shared by main route and catch-all)
 async function doProxyRequest(targetUrl, req, res) {
   console.log(`Proxying: ${req.method} ${targetUrl}`);
 
@@ -176,7 +176,6 @@ async function doProxyRequest(targetUrl, req, res) {
     if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
     if (req.headers.cookie) headers['Cookie'] = req.headers.cookie;
     if (req.headers.referer) {
-      // Set referer to the target origin to avoid blocking
       try {
         const targetOrigin = new URL(targetUrl).origin;
         headers['Referer'] = targetOrigin;
@@ -199,7 +198,19 @@ async function doProxyRequest(targetUrl, req, res) {
 
     const response = await fetch(targetUrl, fetchOptions);
 
-    // Prepare Response Headers
+    // Get content length to check size
+    const contentLength = parseInt(response.headers.get('content-length') || '0');
+    const MAX_SIZE = 50 * 1024 * 1024; // 50MB limit
+    
+    if (contentLength > MAX_SIZE) {
+      console.warn(`Response too large: ${contentLength} bytes, streaming directly`);
+      // For huge responses, just stream without rewriting
+      res.set('Content-Type', response.headers.get('content-type'));
+      return response.body.pipe(res).on('finish', () => {
+        if (response.body.destroy) response.body.destroy();
+      });
+    }
+
     const contentType = response.headers.get('content-type') || 'application/octet-stream';
     
     const headersToSend = {
@@ -209,50 +220,31 @@ async function doProxyRequest(targetUrl, req, res) {
       'Access-Control-Expose-Headers': '*',
       'Content-Security-Policy': "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; style-src * 'unsafe-inline';",
       'X-Frame-Options': 'ALLOWALL',
-      'X-Content-Type-Options': 'nosniff',
       'Content-Type': contentType
     };
 
-    // Forward Set-Cookie headers
     const setCookie = response.headers.get('set-cookie');
     if (setCookie) headersToSend['set-cookie'] = setCookie;
-
-    // Remove headers that might cause CORB
-    delete headersToSend['X-Content-Type-Options'];
 
     res.set(headersToSend);
     res.status(response.status);
 
-    // Handle HTML Rewriting vs Direct Streaming
-    if (contentType && contentType.includes('text/html')) {
+    // Only rewrite HTML, stream everything else
+    if (contentType.includes('text/html') && contentLength < 5 * 1024 * 1024) {
+      // Only rewrite HTML smaller than 5MB
       const text = await response.text();
       const rewritten = rewriteHtml(text, targetUrl, '/ocho/');
       const final = rewritten.toLowerCase().trim().startsWith('<!doctype') 
         ? rewritten 
         : '<!DOCTYPE html>\n' + rewritten;
       res.send(final);
-    } else if (contentType && contentType.includes('application/javascript')) {
-      const text = await response.text();
-      res.set('Content-Type', 'application/javascript; charset=utf-8');
-      res.send(text);
-    } else if (contentType && contentType.includes('text/javascript')) {
-      const text = await response.text();
-      res.set('Content-Type', 'text/javascript; charset=utf-8');
-      res.send(text);
-    } else if (contentType && contentType.includes('text/css')) {
-      const text = await response.text();
-      res.set('Content-Type', 'text/css; charset=utf-8');
-      res.send(text);
-    } else if (contentType && (contentType.includes('application/json') || contentType.includes('text/plain'))) {
-      const text = await response.text();
-      res.send(text);
     } else {
-      // Stream binary content with proper cleanup
+      // Stream everything else to avoid loading into memory
       response.body.pipe(res).on('finish', () => {
-        response.body.destroy();
+        if (response.body.destroy) response.body.destroy();
       }).on('error', (err) => {
         console.error('Stream error:', err);
-        response.body.destroy();
+        if (response.body.destroy) response.body.destroy();
         if (!res.headersSent) res.status(500).end();
       });
     }
@@ -262,7 +254,6 @@ async function doProxyRequest(targetUrl, req, res) {
       res.status(500).json({ error: error.message });
     }
   } finally {
-    // Cleanup - force garbage collection hint
     if (global.gc) {
       global.gc();
     }
