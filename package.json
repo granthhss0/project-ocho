@@ -4,8 +4,9 @@
   "description": "A minimalist web proxy",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node --max-old-space-size=512 --expose-gc server.js",
+    "start:prod": "node --max-old-space-size=1024 --expose-gc server.js",
+    "dev": "nodemon --max-old-space-size=512 --expose-gc server.js"
   },
   "engines": {
     "node": ">=18.0.0"
