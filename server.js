@@ -50,11 +50,8 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
 
   // Remove CORB-triggering attributes
   rewritten = rewritten.replace(/\s+crossorigin/gi, '');
-  
-  // Rewrite fetch calls to go through proxy
-  rewritten = rewritten.replace(/fetch\s*\(/g, 'window.__proxyFetch(');
 
-  // Rewrite Links - USE RELATIVE PATHS, NOT ABSOLUTE
+  // Rewrite Links
   rewritten = rewritten.replace(/(src|href)=["']([^"']+)["']/gi, (match, attr, url) => {
     if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('#') || url.startsWith('javascript:')) return match;
     
@@ -66,14 +63,12 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
       if (url.startsWith('//')) absoluteUrl = 'https:' + url;
       else if (url.startsWith('/')) absoluteUrl = origin + url;
       else if (!url.startsWith('http')) {
-        // Handle relative URLs
         const baseUrlObj = new URL(baseUrl);
         const basePath = baseUrlObj.pathname.substring(0, baseUrlObj.pathname.lastIndexOf('/') + 1);
         absoluteUrl = baseUrlObj.origin + basePath + url;
       }
       
       const encoded = encodeProxyUrl(absoluteUrl);
-      // Return RELATIVE path, not absolute
       return `${attr}="${proxyPrefix}${encoded}"`;
     } catch (e) { 
       console.error('URL rewrite error:', e, url);
@@ -81,67 +76,70 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
     }
   });
 
-  // Inject proxy helper script at the top of <head>
+  // AGGRESSIVE proxy injection - must come FIRST
   const proxyScript = `
     <script>
-      // Set correct base URL for the proxy
       (function() {
         const currentOrigin = window.location.origin;
         const targetOrigin = '${origin}';
+        const inFlight = new Set();
         
-        // Track in-flight requests to prevent loops
-        const inFlightRequests = new Set();
+        console.log('[PROXY] Initializing for', targetOrigin);
         
-        // Intercept ALL navigation attempts
-        document.addEventListener('click', function(e) {
-          const link = e.target.closest('a');
-          if (link && link.href) {
-            const url = link.href;
-            // If it's trying to go to the real site, stop it and proxy it
-            if (url.startsWith(targetOrigin) || (!url.startsWith(currentOrigin) && !url.startsWith('javascript:') && !url.startsWith('mailto:') && !url.startsWith('tel:') && !url.startsWith('#'))) {
-              e.preventDefault();
-              const fullUrl = url.startsWith('http') ? url : targetOrigin + (url.startsWith('/') ? '' : '/') + url;
-              const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
-              window.location.href = currentOrigin + '/ocho/' + encoded;
-            }
-          }
-        }, true);
-        
-        // Override fetch globally - FIX: Don't intercept if already proxied
-        const originalFetch = window.fetch;
-        window.fetch = function(url, options) {
-          // Skip if already a proxy URL or special protocol
-          if (typeof url === 'string') {
-            if (url.startsWith('/ocho/') || url.startsWith('data:') || url.startsWith('blob:')) {
-              return originalFetch(url, options);
-            }
-            
-            // Prevent request loops
-            if (inFlightRequests.has(url)) {
-              console.warn('Preventing fetch loop for:', url);
-              return Promise.reject(new Error('Request loop prevented'));
-            }
-            
-            // Mark as in-flight
-            inFlightRequests.add(url);
-            
-            let fullUrl = url;
-            if (!url.startsWith('http')) {
-              fullUrl = url.startsWith('/') ? targetOrigin + url : targetOrigin + '/' + url;
-            }
-            const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
-            const proxiedUrl = currentOrigin + '/ocho/' + encoded;
-            
-            // Call original fetch and cleanup
-            return originalFetch(proxiedUrl, options).finally(() => {
-              inFlightRequests.delete(url);
+        // KILL SERVICE WORKERS IMMEDIATELY
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(regs => {
+            regs.forEach(reg => {
+              console.log('[PROXY] Unregistering SW:', reg.scope);
+              reg.unregister();
             });
+          });
+          
+          // Block future registrations
+          delete navigator.serviceWorker;
+          Object.defineProperty(navigator, 'serviceWorker', {
+            get: () => { 
+              console.warn('[PROXY] Service Worker blocked');
+              return undefined; 
+            },
+            configurable: false
+          });
+        }
+        
+        // Override fetch BEFORE anything else loads
+        const origFetch = window.fetch;
+        window.fetch = function(url, opts) {
+          let urlStr = typeof url === 'string' ? url : url.url;
+          
+          // Already proxied or special protocol
+          if (urlStr.startsWith('/ocho/') || urlStr.startsWith('data:') || urlStr.startsWith('blob:')) {
+            return origFetch(url, opts);
           }
-          return originalFetch(url, options);
+          
+          // Prevent loops
+          if (inFlight.has(urlStr)) {
+            console.warn('[PROXY] Loop prevented:', urlStr);
+            return Promise.reject(new Error('Loop prevented'));
+          }
+          
+          // Build full URL
+          let fullUrl = urlStr;
+          if (!urlStr.startsWith('http')) {
+            fullUrl = urlStr.startsWith('/') ? targetOrigin + urlStr : targetOrigin + '/' + urlStr;
+          }
+          
+          // Encode and proxy
+          const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
+          const proxied = currentOrigin + '/ocho/' + encoded;
+          
+          console.log('[PROXY] Fetch:', urlStr, '->', proxied);
+          
+          inFlight.add(urlStr);
+          return origFetch(proxied, opts).finally(() => inFlight.delete(urlStr));
         };
         
-        // Override XMLHttpRequest - FIX: Don't intercept if already proxied
-        const originalXHROpen = XMLHttpRequest.prototype.open;
+        // Override XHR
+        const origOpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function(method, url, ...args) {
           if (typeof url === 'string' && !url.startsWith('/ocho/') && !url.startsWith('data:') && !url.startsWith('blob:')) {
             let fullUrl = url;
@@ -150,24 +148,32 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
             }
             const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
             url = currentOrigin + '/ocho/' + encoded;
+            console.log('[PROXY] XHR:', method, url);
           }
-          return originalXHROpen.call(this, method, url, ...args);
+          return origOpen.call(this, method, url, ...args);
         };
         
-        // Block service worker registration
-        if ('serviceWorker' in navigator) {
-          Object.defineProperty(navigator, 'serviceWorker', {
-            get: () => undefined
-          });
-        }
+        // Intercept link clicks
+        document.addEventListener('click', function(e) {
+          const link = e.target.closest('a');
+          if (link && link.href) {
+            const url = link.href;
+            if (url.startsWith(targetOrigin) || (!url.startsWith(currentOrigin) && !url.startsWith('javascript:') && !url.startsWith('mailto:') && !url.startsWith('tel:') && !url.startsWith('#'))) {
+              e.preventDefault();
+              const fullUrl = url.startsWith('http') ? url : targetOrigin + url;
+              const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
+              window.location.href = currentOrigin + '/ocho/' + encoded;
+            }
+          }
+        }, true);
+        
+        console.log('[PROXY] Initialization complete');
       })();
     </script>
   `;
 
-  rewritten = rewritten.replace(/<head>/i, '<head>' + proxyScript);
-
-  // Inject base tag - REMOVE THIS, it causes the wrong origin issue
-  // The proxy script handles URL resolution instead
+  // Inject at VERY start of head
+  rewritten = rewritten.replace(/<head[^>]*>/i, (match) => match + proxyScript);
 
   return rewritten;
 }
