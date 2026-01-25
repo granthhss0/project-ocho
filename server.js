@@ -300,15 +300,33 @@ async function doProxyRequest(targetUrl, req, res) {
   }
 }
 
-// 4. THE "KILLER" SERVICE WORKER
+// 4. THE "KILLER" SERVICE WORKER - AGGRESSIVE VERSION
 app.get('/sw.js', (req, res) => {
   res.set('Content-Type', 'application/javascript');
   res.send(`
-    self.addEventListener('install', () => self.skipWaiting());
-    self.addEventListener('activate', () => {
-      self.registration.unregister().then(() => {
-        console.log('Zombie Service Worker Killed');
-      });
+    // Aggressively kill any service worker
+    self.addEventListener('install', (e) => {
+      self.skipWaiting();
+      e.waitUntil(
+        caches.keys().then((names) => {
+          return Promise.all(names.map(name => caches.delete(name)));
+        })
+      );
+    });
+    
+    self.addEventListener('activate', (e) => {
+      e.waitUntil(
+        self.registration.unregister().then(() => {
+          return self.clients.matchAll();
+        }).then((clients) => {
+          clients.forEach(client => client.navigate(client.url));
+        })
+      );
+    });
+    
+    // Don't intercept ANY requests
+    self.addEventListener('fetch', (e) => {
+      e.respondWith(fetch(e.request));
     });
   `);
 });
@@ -339,33 +357,42 @@ app.use('/ocho/:url(*)', (req, res) => {
 app.all('*', (req, res) => {
   const referer = req.headers.referer;
   
+  console.log(`Catch-all hit: ${req.method} ${req.url}`);
+  console.log(`Referer: ${referer}`);
+  
   // Try to fix leaked requests by reconstructing the target URL
-  if (referer && referer.includes('/ocho/')) {
+  if (referer) {
     try {
-      // Extract the base URL from referer
-      const refPath = new URL(referer).pathname;
+      let targetOrigin = null;
       
-      // Split correctly - may have /ocho/encodedurl/extra or just /ocho/encodedurl
-      const parts = refPath.split('/ocho/');
-      if (parts.length > 1) {
-        const encodedPart = parts[1].split('/')[0].split('?')[0];
-        const targetOrigin = new URL(decodeProxyUrl(encodedPart)).origin;
-        
-        // Construct the full target URL
+      // Extract origin from referer
+      if (referer.includes('/ocho/')) {
+        const refPath = new URL(referer).pathname;
+        const parts = refPath.split('/ocho/');
+        if (parts.length > 1) {
+          const encodedPart = parts[1].split('/')[0].split('?')[0];
+          targetOrigin = new URL(decodeProxyUrl(encodedPart)).origin;
+        }
+      }
+      
+      // If we found a target origin, proxy the request
+      if (targetOrigin) {
         const fixedUrl = targetOrigin + req.url;
-        
-        console.log(`Catch-all fixing: ${req.url} -> ${fixedUrl}`);
-        
-        // Proxy the request directly (don't redirect)
+        console.log(`✓ Catch-all proxying: ${req.url} -> ${fixedUrl}`);
         return doProxyRequest(fixedUrl, req, res);
       }
     } catch (e) {
-      console.error('Catch-all fix failed:', e.message, 'for URL:', req.url);
+      console.error('Catch-all parsing error:', e.message);
     }
   }
   
-  console.log(`404 Not Found: ${req.url} (referer: ${referer || 'none'})`);
-  res.status(404).json({ error: 'Not Found', path: req.url });
+  // If no referer or parsing failed, return 404
+  console.log(`✗ 404 Not Found: ${req.url}`);
+  res.status(404).json({ 
+    error: 'Not Found', 
+    path: req.url,
+    hint: 'This request could not be proxied. The page may need to be refreshed.'
+  });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
