@@ -111,8 +111,11 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
         window.fetch = function(url, opts) {
           let urlStr = typeof url === 'string' ? url : url.url;
           
-          // Already proxied or special protocol
-          if (urlStr.startsWith('/ocho/') || urlStr.startsWith('data:') || urlStr.startsWith('blob:')) {
+          // Already proxied, special protocol, OR on our proxy domain
+          if (urlStr.startsWith('/ocho/') || 
+              urlStr.startsWith('data:') || 
+              urlStr.startsWith('blob:') ||
+              urlStr.includes(currentOrigin)) {
             return origFetch(url, opts);
           }
           
@@ -141,7 +144,11 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
         // Override XHR
         const origOpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function(method, url, ...args) {
-          if (typeof url === 'string' && !url.startsWith('/ocho/') && !url.startsWith('data:') && !url.startsWith('blob:')) {
+          if (typeof url === 'string' && 
+              !url.startsWith('/ocho/') && 
+              !url.startsWith('data:') && 
+              !url.startsWith('blob:') &&
+              !url.includes(currentOrigin)) {
             let fullUrl = url;
             if (!url.startsWith('http')) {
               fullUrl = url.startsWith('/') ? targetOrigin + url : targetOrigin + '/' + url;
