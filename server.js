@@ -89,6 +89,9 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
         const currentOrigin = window.location.origin;
         const targetOrigin = '${origin}';
         
+        // Track in-flight requests to prevent loops
+        const inFlightRequests = new Set();
+        
         // Intercept ALL navigation attempts
         document.addEventListener('click', function(e) {
           const link = e.target.closest('a');
@@ -104,29 +107,40 @@ function rewriteHtml(html, baseUrl, proxyPrefix) {
           }
         }, true);
         
-        // Proxy fetch wrapper
-        window.__proxyFetch = function(url, options) {
-          if (typeof url === 'string' && !url.startsWith('/ocho/') && !url.startsWith('data:') && !url.startsWith('blob:')) {
+        // Override fetch globally - FIX: Don't intercept if already proxied
+        const originalFetch = window.fetch;
+        window.fetch = function(url, options) {
+          // Skip if already a proxy URL or special protocol
+          if (typeof url === 'string') {
+            if (url.startsWith('/ocho/') || url.startsWith('data:') || url.startsWith('blob:')) {
+              return originalFetch(url, options);
+            }
+            
+            // Prevent request loops
+            if (inFlightRequests.has(url)) {
+              console.warn('Preventing fetch loop for:', url);
+              return Promise.reject(new Error('Request loop prevented'));
+            }
+            
+            // Mark as in-flight
+            inFlightRequests.add(url);
+            
             let fullUrl = url;
             if (!url.startsWith('http')) {
               fullUrl = url.startsWith('/') ? targetOrigin + url : targetOrigin + '/' + url;
             }
             const encoded = btoa(fullUrl).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
-            url = currentOrigin + '/ocho/' + encoded;
-          }
-          return fetch(url, options);
-        };
-        
-        // Override fetch globally
-        const originalFetch = window.fetch;
-        window.fetch = function(url, options) {
-          if (typeof url === 'string' && !url.startsWith('/ocho/') && !url.startsWith('data:') && !url.startsWith('blob:')) {
-            return window.__proxyFetch(url, options);
+            const proxiedUrl = currentOrigin + '/ocho/' + encoded;
+            
+            // Call original fetch and cleanup
+            return originalFetch(proxiedUrl, options).finally(() => {
+              inFlightRequests.delete(url);
+            });
           }
           return originalFetch(url, options);
         };
         
-        // Override XMLHttpRequest
+        // Override XMLHttpRequest - FIX: Don't intercept if already proxied
         const originalXHROpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function(method, url, ...args) {
           if (typeof url === 'string' && !url.startsWith('/ocho/') && !url.startsWith('data:') && !url.startsWith('blob:')) {
@@ -188,7 +202,7 @@ async function doProxyRequest(targetUrl, req, res) {
       method: req.method,
       headers: headers,
       redirect: 'follow',
-      signal: AbortSignal.timeout(30000)
+      signal: AbortSignal.timeout(60000) // Increased to 60 seconds
     };
 
     // Forward Body for POST/PUT
@@ -240,18 +254,44 @@ async function doProxyRequest(targetUrl, req, res) {
       res.send(final);
     } else {
       // Stream everything else to avoid loading into memory
-      response.body.pipe(res).on('finish', () => {
+      const stream = response.body.pipe(res);
+      
+      stream.on('finish', () => {
         if (response.body.destroy) response.body.destroy();
-      }).on('error', (err) => {
-        console.error('Stream error:', err);
+      });
+      
+      stream.on('error', (err) => {
+        console.error('Stream error:', err.message);
         if (response.body.destroy) response.body.destroy();
         if (!res.headersSent) res.status(500).end();
+      });
+      
+      // Handle client disconnect
+      req.on('close', () => {
+        console.log('Client disconnected, aborting stream');
+        if (response.body.destroy) response.body.destroy();
       });
     }
   } catch (error) {
     console.error(`Proxy Fail: ${targetUrl} - ${error.message}`);
-    if (!res.headersSent) {
-      res.status(500).json({ error: error.message });
+    
+    // Handle specific error types
+    if (error.name === 'AbortError' || error.message.includes('aborted')) {
+      console.log('Request timeout or aborted');
+      if (!res.headersSent) {
+        res.status(504).json({ 
+          error: 'Request timeout', 
+          message: 'The target server took too long to respond. Try a simpler page or refresh.' 
+        });
+      }
+    } else if (error.code === 'ECONNREFUSED') {
+      if (!res.headersSent) {
+        res.status(502).json({ error: 'Connection refused', message: 'Could not connect to target server' });
+      }
+    } else {
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Proxy error', message: error.message });
+      }
     }
   } finally {
     if (global.gc) {
